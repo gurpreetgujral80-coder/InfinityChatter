@@ -7,6 +7,8 @@ import os
 import uuid
 
 app = Flask(__name__)
+app.config['MAX_CONTENT_LENGTH'] = 1024 * 1024 * 1024  # 1 GB upload limit
+
 translator = Translator()
 
 # Directories
@@ -30,7 +32,8 @@ def index():
         # Save uploaded file
         unique_id = str(uuid.uuid4())[:8]
         video_path = os.path.join(UPLOAD_FOLDER, f"{unique_id}_{video_file.filename}")
-        output_path = os.path.join(OUTPUT_FOLDER, f"subtitled_{unique_id}.mp4")
+        output_filename = f"subtitled_{unique_id}.mp4"
+        output_path = os.path.join(OUTPUT_FOLDER, output_filename)
         video_file.save(video_path)
 
         try:
@@ -38,10 +41,11 @@ def index():
             subtitles = generate_subtitles(video_clip)
             create_video_with_subtitles(video_clip, subtitles, output_path)
 
-            # Render page with preview
+            # Render page with preview + download
             return render_template(
                 "index.html",
-                video_url=f"/outputs/subtitled_{unique_id}.mp4",
+                video_url=f"/outputs/{output_filename}",
+                download_url=f"/outputs/{output_filename}",
                 success="✅ Video generated successfully!"
             )
         except Exception as e:
@@ -50,6 +54,7 @@ def index():
             if os.path.exists(video_path):
                 os.remove(video_path)
 
+    # Default homepage
     return render_template_string('''
         <!DOCTYPE html>
         <html lang="en">
@@ -92,6 +97,7 @@ def index():
                   <source src="{{ video_url }}" type="video/mp4">
                   Your browser does not support the video tag.
                 </video>
+                <a href="{{ download_url }}" download class="btn btn-success w-100 mt-3">⬇️ Download Video</a>
               {% endif %}
             </div>
           </div>
@@ -130,6 +136,7 @@ def generate_subtitles(video_clip):
 
         os.remove(chunk_path)
 
+        # Translate non-English words
         words = text.split()
         translated_line = []
         for word in words:
@@ -168,4 +175,5 @@ def create_video_with_subtitles(video_clip, subtitles, output_path):
 
 
 if __name__ == "__main__":
+    # For local testing only (Render will use gunicorn)
     app.run(host="0.0.0.0", port=5000, debug=False)
