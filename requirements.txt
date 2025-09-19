@@ -1,5 +1,11 @@
-flask
+Flask
 moviepy
+imageio
+imageio-ffmpeg
+numpy
+decorator
+requests
+tqdm
 googletrans==4.0.0-rc1
 SpeechRecognition
 pydub
