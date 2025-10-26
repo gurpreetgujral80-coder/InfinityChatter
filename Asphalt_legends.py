@@ -75,6 +75,7 @@ messages_store = []
 polls_store = {}
 USER_SID = {}
 ONLINE_USERS = {}
+MEET_BASE_URL = os.environ.get('MEET_BASE_URL', 'https://meet.google.com/new')
 
 # ensure static subfolders
 pathlib.Path(os.path.join(app.static_folder, "uploads")).mkdir(parents=True, exist_ok=True)
@@ -549,17 +550,28 @@ def on_call_invite(data):
     # persist call log
     save_call(call_id, caller, to, bool(data.get('is_video')), status='ringing')
 
-# Callee accepts -> server forwards acceptance to caller
 @socketio.on('call:accept')
-def on_call_accept(data):
-    call_id = data.get('call_id'); callee = data.get('from')
-    call = CALL_INVITES.get(call_id)
-    if not call:
-        emit('call:error', {'error': 'no_call'}, to=request.sid); return
-    call['status'] = 'accepted'
-    # inform caller
-    emit_to_user(call['caller'], 'call:accepted', {'call_id': call_id, 'from': callee})
+def on_call_accept_colon(data):
+    call_id = data.get('call_id')
+    info = CALL_INVITES.get(call_id)
+    if not info:
+        emit('call:error', {'error': 'no_call'}, to=request.sid)
+        return
+
+    info['status'] = 'accepted'
     update_call_started(call_id)
+
+    sid_caller = USER_SID.get(info.get('caller'))
+    sid_callee = USER_SID.get(info.get('callee'))
+
+    meet_url = f"{MEET_BASE_URL.rstrip('/')}/join?call_id={call_id}"
+
+    if sid_caller:
+        emit('open_meet', {'url': meet_url}, room=sid_caller)
+        emit('call:accepted', {'call_id': call_id, 'from': info.get('callee')}, room=sid_caller)
+
+    if sid_callee:
+        emit('open_meet', {'url': meet_url}, room=sid_callee)
 
 # Callee/Caller reject/hangup
 @socketio.on('call:hangup')
@@ -848,8 +860,15 @@ AUDIO_CALL_HTML = r"""
     });
 
     // When the callee accepts and is told to open the video call page
-    socket.on('open_video_page', data => {
-      if (data.url) window.location.href = data.url;
+    socket.on("open_meet", (data) => {
+      if (!data || !data.url) return;
+      const appUrl = data.url.replace("https://meet.google.com/new", "googlemeet://meet.google.com/new");
+      // Try to open the app first
+      window.location.href = appUrl;
+      // Fallback to web after 1–1.5 s
+      setTimeout(() => {
+        window.open(data.url, "_blank", "noopener,noreferrer");
+      }, 1500);
     });
 
     if (MYNAME) socket.emit('register_socket', {username: MYNAME});
@@ -872,6 +891,11 @@ AUDIO_CALL_HTML = r"""
 
     function setState(text){callStateEl.textContent = text}
 
+    // Call this when caller clicks "Video Call" on a user
+    function startMeetCall(selectedUser) {
+      socket.emit("call_outgoing", { to: selectedUser, from: MYNAME, isVideo: true });
+    }
+
     async function ensureLocalStream(){
       if (localStream) return localStream;
       try{
@@ -893,544 +917,94 @@ AUDIO_CALL_HTML = r"""
       return pc;
     }
 
-    // Caller flow: create offer and send to peer
-    async function callerStart(){
-      setState('Calling');
-      await ensureLocalStream();
-      pc = createPeerConnection();
-      localStream.getTracks().forEach(t=>pc.addTrack(t, localStream));
-      const offer = await pc.createOffer();
-      await pc.setLocalDescription(offer);
-      socket.emit('call:offer', {to: PEER, from: MYNAME, sdp: offer, call_id: CALL_ID});
-    }
+    socket.on("open_meet_creator", ({ call_id }) => {
+      // 1) Open Meet (web/app) in a new tab so caller can immediately create a meeting
+      window.open("https://meet.google.com/new", "_blank", "noopener,noreferrer");
 
-    // Callee flow: when offer received, create answer
-    socket.on('call:offer', async (data)=>{
-      if(!CALL_ID || data.call_id !== CALL_ID) return; // ignore other calls
-      setState('Incoming call');
-      // Auto-accept (WhatsApp-like behavior when visiting call page) — user can hang up
-      try{
-        await ensureLocalStream();
-        pc = createPeerConnection();
-        localStream.getTracks().forEach(t=>pc.addTrack(t, localStream));
-        const desc = new RTCSessionDescription(data.sdp);
-        await pc.setRemoteDescription(desc);
-        const answer = await pc.createAnswer();
-        await pc.setLocalDescription(answer);
-        socket.emit('call:answer', {to: data.from, from: MYNAME, sdp: answer, call_id: CALL_ID});
-        setState('Connected'); startTimer();
-      }catch(e){console.error(e); setState('Failed to join')}
+      // 2) Show a small share input UI for the caller to paste the meeting link and share
+      if (document.getElementById('meet-share-box')) return; // avoid duplicates
+
+      const box = document.createElement("div");
+      box.id = "meet-share-box";
+      box.style.cssText = "position:fixed;bottom:22px;left:50%;transform:translateX(-50%);background:#0f1720;color:#fff;padding:12px;border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,0.6);z-index:9999;display:flex;gap:8px;align-items:center;";
+      box.innerHTML = `
+        <input id="meetLinkInput" placeholder="Paste Meet link here (Ctrl+V)" style="padding:8px;border-radius:6px;border:1px solid rgba(255,255,255,0.06);width:320px;" />
+        <button id="shareMeetBtn" style="background:#25D366;color:#fff;border:0;padding:8px 10px;border-radius:6px;cursor:pointer;">Share</button>
+        <button id="cancelShareBtn" style="background:#fff;color:#000;border:0;padding:8px 10px;border-radius:6px;cursor:pointer;">Cancel</button>
+      `;
+      document.body.appendChild(box);
+
+      document.getElementById("shareMeetBtn").onclick = () => {
+        const link = document.getElementById("meetLinkInput").value.trim();
+        if (!link) { alert("Please paste a Meet link first."); return; }
+        socket.emit("share_meet_invite", { call_id, url: link });
+        box.remove();
+      };
+
+      document.getElementById("cancelShareBtn").onclick = () => { box.remove(); };
     });
 
-    socket.on('call:answer', async (data)=>{
-      if(!CALL_ID || data.call_id !== CALL_ID) return; if(!pc) return;
-      try{ const desc = new RTCSessionDescription(data.sdp); await pc.setRemoteDescription(desc); setState('Connected'); startTimer(); }catch(e){console.error(e)}
-    });
-
-    socket.on('call:candidate', async (data)=>{ if(!CALL_ID || data.call_id !== CALL_ID) return; try{ if(pc && data.candidate) await pc.addIceCandidate(data.candidate); }catch(e){console.warn('addIce failed',e)} });
-
-    socket.on('call:ended', (data)=>{ if(!CALL_ID || data.call_id !== CALL_ID) return; endCall(false); });
-
-    function endCall(emit=true){ stopTimer(); setState('Call ended'); if(pc){ try{pc.getSenders().forEach(s=>{try{s.track&&s.track.stop()}catch(e){} }); pc.close(); }catch(e){} pc=null } if(localStream){ localStream.getTracks().forEach(t=>t.stop()); localStream=null } if(emit && CALL_ID){ socket.emit('call:hangup', {call_id: CALL_ID, from: MYNAME}) } // small UI feedback
-      setTimeout(()=>{ window.close && window.close() }, 1200);
-    }
-
-    document.getElementById('endBtn').addEventListener('click', ()=>endCall(true));
-
-    // mute toggle
-    let muted=false; document.getElementById('muteBtn').addEventListener('click', ()=>{ if(!localStream) return; muted = !muted; localStream.getAudioTracks().forEach(t=>t.enabled = !muted); document.getElementById('muteBtn').textContent = muted? '🎙️' : '🔇'; callStateEl.textContent = muted? 'Muted' : 'Connected' });
-
-    document.getElementById('speakerBtn').addEventListener('click', ()=>{ // attempt to toggle audio output sink to speaker (if supported)
-      const audio = document.getElementById('remoteAudio'); if(!audio) return; const current = audio.dataset.spk||'default'; // not robust across browsers
-      setState('Toggling speaker'); try{ if(typeof audio.setSinkId === 'function'){ const next = current==='default' ? 'speaker' : 'default'; audio.setSinkId(next).then(()=>{ audio.dataset.spk = next; setState('Connected') }).catch(()=>{ setState('Speaker not supported') }) }else setState('Not supported') }catch(e){setState('Error')}
-    });
-
-    // If the page was opened by the caller, auto-start
-    (async ()=>{
-      if(!MYNAME){ setState('Please sign in first'); return }
-      if(!CALL_ID){ setState('Missing call id'); return }
-      // If URL contains role=caller, start caller flow. If not specified, try to start as caller when "from" equals MYNAME
-      const role = params.get('role');
-      const fromParam = params.get('from') || '';
-      if(role === 'caller' || (fromParam && fromParam === MYNAME)){
-        try{ await callerStart(); }catch(e){console.error(e);}
-      } else {
-        setState('Waiting for incoming call');
-      }
-    })();
-
-    // small UX: when user navigates away, hang up
-    window.addEventListener('beforeunload', ()=>{ endCall(true) });
-  </script>
-</body>
-</html>
-"""
-
-VIDEO_CALL_HTML = r"""
-<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Video Call — InfinityChatter ♾️</title>
-  <style>
-    :root{--bg:#071021;--panel:#0f1720;--muted:#9fb0bf;--accent:#25D366}
-    html,body{height:100%;margin:0;font-family:Inter,system-ui,Segoe UI,Roboto,Arial;background:radial-gradient(circle at 10% 10%, #041428, #02101a);color:#eaf4ff}
-    .call-frame{position:fixed;inset:0;display:flex;flex-direction:column;gap:8px;padding:12px;box-sizing:border-box}
-    .video-area{flex:1;display:block;position:relative;border-radius:12px;overflow:hidden;background:#000}
-    #remoteVideo{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;background:#000}
-    /* self view small box above composer, bottom-right */
-    .self-box{position:fixed;right:20px;bottom:110px;width:220px;height:140px;border-radius:10px;overflow:hidden;box-shadow:0 8px 30px rgba(0,0,0,0.6);border:2px solid rgba(255,255,255,0.04);background:#0a1722;z-index:30}
-    .self-box video{width:100%;height:100%;object-fit:cover;display:block}
-    /* composer area at bottom with gap */
-    .composer{position:fixed;left:12px;right:12px;bottom:12px;height:84px;background:linear-gradient(180deg,rgba(255,255,255,0.02),rgba(255,255,255,0.01));border-radius:12px;padding:10px;display:flex;align-items:center;gap:10px;z-index:40}
-    .composer input[type="text"]{flex:1;padding:10px;border-radius:8px;border:1px solid rgba(255,255,255,0.05);background:transparent;color:inherit}
-    .controls{display:flex;gap:8px;align-items:center}
-    .btn{background:rgba(255,255,255,0.03);border:0;padding:10px;border-radius:8px;cursor:pointer;font-size:18px}
-    .btn.end{background:#ff3b30;color:#fff;padding:12px;border-radius:10px}
-    .bg-picker{display:flex;gap:6px}
-    .bg-thumb{width:48px;height:32px;border-radius:6px;overflow:hidden;border:2px solid rgba(255,255,255,0.03);cursor:pointer}
-    .status-bubble{position:absolute;left:12px;top:12px;background:rgba(0,0,0,0.35);padding:8px;border-radius:10px;font-weight:600;color:var(--muted);z-index:40}
-    .peer-label{position:absolute;left:12px;bottom:12px;background:linear-gradient(180deg,rgba(0,0,0,0.25),rgba(0,0,0,0.1));padding:8px;border-radius:8px;z-index:40}
-    @media (max-width:700px){ .self-box{width:160px;height:110px;right:12px;bottom:120px} .composer{height:96px;flex-direction:column;align-items:flex-end;padding:8px;gap:6px} .composer input[type="text"]{width:100%} }
-  </style>
-</head>
-<body>
-  <div class="call-frame">
-    <div class="video-area" id="videoArea">
-      <video id="remoteVideo" autoplay playsinline></video>
-      <div class="status-bubble" id="statusText">Preparing...</div>
-      <div class="peer-label" id="peerLabel">Connecting…</div>
-    </div>
-
-    <div class="self-box" id="selfBox" title="You">
-      <video id="localVideo" autoplay muted playsinline></video>
-    </div>
-
-    <div class="composer" id="composer">
-      <div class="controls" aria-hidden="false">
-        <button id="btnToggleCam" class="btn" title="Camera on/off">📷</button>
-        <button id="btnFlipCam" class="btn" title="Flip camera">🔁</button>
-        <button id="btnToggleMic" class="btn" title="Mic on/off">🎙️</button>
-        <button id="btnShareScreen" class="btn" title="Share screen">🖥️</button>
-
-        <div style="display:flex;align-items:center;gap:6px;margin-left:8px">
-          <div style="font-size:12px;color:var(--muted);margin-right:6px">Background</div>
-          <div class="bg-picker" id="bgPicker" role="list">
-            <div class="bg-thumb" data-bg="none" title="None" style="background:linear-gradient(180deg,#222,#111)"></div>
-            <div class="bg-thumb" data-bg="blur" title="Blur" style="background:linear-gradient(180deg,#556,#334)"></div>
-            <div class="bg-thumb" data-bg="img1" title="Beach" style="background-image:url('/static/gifs/beach.jpg');background-size:cover"></div>
-          </div>
+    socket.on("incoming_meet_invite", (data) => {
+      // data: { from, call_id, url? }
+      const { from, call_id, url } = data;
+      // create a pretty banner
+      const banner = document.createElement("div");
+      banner.className = "meet-invite-banner";
+      banner.style.cssText = "position:fixed;top:18px;left:50%;transform:translateX(-50%);background:linear-gradient(180deg,#0b1320,#071021);color:#fff;padding:14px 18px;border-radius:12px;box-shadow:0 10px 30px rgba(2,6,23,0.6);z-index:9999;display:flex;gap:12px;align-items:center;";
+      banner.innerHTML = `
+        <div style="font-weight:700;margin-right:8px;">${from}</div>
+        <div style="opacity:0.9;margin-right:12px;">is inviting you to a Google Meet</div>
+        <div style="display:flex;gap:8px;">
+          <button id="acceptMeetBtn" style="background:#25D366;border:0;padding:8px 10px;border-radius:8px;cursor:pointer;">Accept</button>
+          <button id="declineMeetBtn" style="background:#ff3b30;border:0;padding:8px 10px;border-radius:8px;cursor:pointer;">Decline</button>
         </div>
+      `;
+      document.body.appendChild(banner);
 
-        <button id="btnLeave" class="btn end" title="Leave call">⛔</button>
-      </div>
-    </div>
-  </div>
+      document.getElementById("acceptMeetBtn").onclick = () => {
+        banner.remove();
+        // If server forwarded url, use it; otherwise open /new and then server/caller need to coordinate.
+        const meetUrl = url || "https://meet.google.com/new";
+        // Send accept to server with the meet URL so both open same link
+        socket.emit("meet_accept", { call_id, url: meetUrl });
 
-  <!-- socket.io client (CDN v4 compatible) -->
-  <script src="https://cdn.jsdelivr.net/npm/socket.io-client@4.7.2/dist/socket.io.min.js"></script>
-
-  <script>
-    // Jinja-provided username
-    const MYNAME = String({{ (session.get('username')|tojson) or '""' }}).replace(/^"|"$/g,'');
-    const params = new URLSearchParams(location.search);
-    const CALL_ID = params.get('call_id');
-    const PEER = params.get('peer') || params.get('to') || params.get('from') || '';
-    document.getElementById('peerLabel').textContent = PEER || 'Unknown';
-
-    const socket = io();
-    if (MYNAME) socket.emit('register_socket', {username: MYNAME});
-
-    const remoteVideo = document.getElementById('remoteVideo');
-    const localVideo = document.getElementById('localVideo');
-    const statusText = document.getElementById('statusText');
-
-    let pc = null;
-    let localStream = null;
-    let cameraSender = null;
-    let usingFrontCamera = true;
-    let canvasProcessor = null; // {canvas,ctx,raf,stream,mode,image}
-    let originalVideoTrack = null;
-    let currentVideoTrack = null;
-
-    function setStatus(t){ statusText.textContent = t; }
-
-    async function getCameraStream() {
-      if (localStream) {
-        // if video exists return existing stream (but ensure new facingMode if needed)
-        return localStream;
-      }
-      try {
-        const s = await navigator.mediaDevices.getUserMedia({ video: { facingMode: usingFrontCamera ? 'user' : 'environment' }, audio: true });
-        localStream = s;
-        return s;
-      } catch (e) {
-        console.error('getUserMedia failed', e);
-        setStatus('Camera/mic denied');
-        throw e;
-      }
-    }
-
-    function createPeerConnection() {
-      pc = new RTCPeerConnection();
-      pc.onicecandidate = (ev) => {
-        if (ev.candidate) socket.emit('call:candidate', { to: PEER, from: MYNAME, candidate: ev.candidate, call_id: CALL_ID });
-      };
-      pc.ontrack = (ev) => {
-        const [remoteStream] = ev.streams;
-        remoteVideo.srcObject = remoteStream;
-      };
-      return pc;
-    }
-
-    // call flow (caller creates offer)
-    async function callerStart(){
-      setStatus('Calling');
-      await getCameraStream();
-      pc = createPeerConnection();
-      // add all tracks (audio + video)
-      localStream.getTracks().forEach(track => {
-        const s = pc.addTrack(track, localStream);
-        if (track.kind === 'video') cameraSender = s;
-      });
-      originalVideoTrack = localStream.getVideoTracks()[0];
-      currentVideoTrack = originalVideoTrack;
-      const offer = await pc.createOffer();
-      await pc.setLocalDescription(offer);
-      socket.emit('call:offer', { to: PEER, from: MYNAME, sdp: offer, call_id: CALL_ID });
-    }
-
-    socket.on('call:offer', async (data) => {
-      if (!CALL_ID || data.call_id !== CALL_ID) return;
-      setStatus('Incoming call');
-      try {
-        await getCameraStream();
-        pc = createPeerConnection();
-        localStream.getTracks().forEach(track => {
-          const s = pc.addTrack(track, localStream);
-          if (track.kind === 'video') cameraSender = s;
-        });
-        originalVideoTrack = localStream.getVideoTracks()[0];
-        currentVideoTrack = originalVideoTrack;
-        await pc.setRemoteDescription(new RTCSessionDescription(data.sdp));
-        const answer = await pc.createAnswer();
-        await pc.setLocalDescription(answer);
-        socket.emit('call:answer', { to: data.from, from: MYNAME, sdp: answer, call_id: CALL_ID });
-        setStatus('Connected');
-      } catch (e) {
-        console.error(e);
-        setStatus('Failed to join');
-      }
-    });
-
-    socket.on('call:answer', async (data) => {
-      if (!CALL_ID || data.call_id !== CALL_ID) return;
-      if (!pc) return;
-      try {
-        await pc.setRemoteDescription(new RTCSessionDescription(data.sdp));
-        setStatus('Connected');
-      } catch (e) { console.error(e); }
-    });
-
-    socket.on('call:candidate', async (data) => {
-      if (!CALL_ID || data.call_id !== CALL_ID) return;
-      try {
-        if (pc && data.candidate) await pc.addIceCandidate(data.candidate);
-      } catch (e) { console.warn('addIce failed', e); }
-    });
-
-    socket.on('call:ended', (data) => {
-      if (!CALL_ID || data.call_id !== CALL_ID) return;
-      endCall(false);
-    });
-
-    function endCall(emit=true) {
-      setStatus('Call ended');
-      if (pc) {
-        try { pc.getSenders().forEach(s => { try { s.track && s.track.stop() } catch(e){} }); pc.close(); } catch(e) {}
-        pc = null;
-      }
-      if (canvasProcessor) stopCanvasProcessor();
-      if (localStream) {
-        localStream.getTracks().forEach(t => t.stop());
-        localStream = null;
-      }
-      if (emit && CALL_ID) socket.emit('call:hangup', { call_id: CALL_ID, from: MYNAME });
-      setTimeout(()=>{ try{ window.close && window.close() }catch(e){} }, 900);
-    }
-
-    // utilities for replacing the outgoing video track (cameraSender)
-    async function replaceVideoTrack(newTrack) {
-      try {
-        if (!pc) return;
-        if (cameraSender) {
-          await cameraSender.replaceTrack(newTrack);
-          currentVideoTrack = newTrack;
-        } else {
-          // fallback: addTrack
-          cameraSender = pc.getSenders().find(s => s.track && s.track.kind === 'video');
-          if (cameraSender) await cameraSender.replaceTrack(newTrack);
-        }
-      } catch (e) { console.error('replaceTrack error', e); }
-    }
-
-    // toggle mic
-    document.getElementById('btnToggleMic').addEventListener('click', async ()=>{
-      try {
-        await getCameraStream();
-        const t = localStream.getAudioTracks()[0];
-        if (!t) return;
-        t.enabled = !t.enabled;
-        document.getElementById('btnToggleMic').textContent = t.enabled ? '🎙️' : '🔇';
-        // optional: inform peer
-        socket.emit('call:signal', { to: PEER, payload: { type: 'mic', enabled: t.enabled }});
-      } catch(e) { console.error(e); }
-    });
-
-    // toggle camera (mute/unmute video)
-    document.getElementById('btnToggleCam').addEventListener('click', async ()=>{
-      try {
-        await getCameraStream();
-        const t = localStream.getVideoTracks()[0];
-        if (!t) return;
-        t.enabled = !t.enabled;
-        document.getElementById('btnToggleCam').textContent = t.enabled ? '📷' : '🚫';
-        socket.emit('call:signal', { to: PEER, payload: { type: 'cam', enabled: t.enabled }});
-      } catch(e) { console.error(e); }
-    });
-
-    // flip camera (front <-> back)
-    document.getElementById('btnFlipCam').addEventListener('click', async ()=>{
-      try {
-        usingFrontCamera = !usingFrontCamera;
-        // stop current video track, get new stream
-        if (localStream) {
-          localStream.getVideoTracks().forEach(t => t.stop());
-          // keep audio track if present
-          const audioTracks = localStream.getAudioTracks();
-          localStream = null;
-          const s = await navigator.mediaDevices.getUserMedia({ video: { facingMode: usingFrontCamera ? 'user' : 'environment' }, audio: audioTracks.length ? {optional: []} : true });
-          // attach new video to localVideo and replace sender
-          const newVid = s.getVideoTracks()[0];
-          if (!newVid) return;
-          // keep audio track from previous local stream if available
-          if (audioTracks.length && s.getAudioTracks().length === 0) {
-            audioTracks.forEach(at => s.addTrack(at));
-          }
-          localStream = s;
-          localVideo.srcObject = s;
-          originalVideoTrack = newVid;
-          await replaceVideoTrack(newVid);
-        } else {
-          // no localStream yet
-          await getCameraStream();
-          localVideo.srcObject = localStream;
-          originalVideoTrack = localStream.getVideoTracks()[0];
-          await replaceVideoTrack(originalVideoTrack);
-        }
-      } catch (e) { console.error('flip camera failed', e); }
-    });
-
-    // share screen: replace outgoing video track with display media, revert when ended
-    document.getElementById('btnShareScreen').addEventListener('click', async ()=>{
-      try {
-        const screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
-        const screenTrack = screenStream.getVideoTracks()[0];
-        if (!screenTrack) return;
-        // replace sender
-        await replaceVideoTrack(screenTrack);
-        // update local preview to show screen (unmuted)
-        localVideo.srcObject = screenStream;
-        // when screen sharing ends, revert
-        screenTrack.onended = async () => {
-          // stop screen stream tracks
-          screenStream.getTracks().forEach(t => t.stop());
-          // restore camera
-          await ensureCameraAndRestorePreview();
-        };
-      } catch (e) {
-        console.error('share screen failed', e);
-      }
-    });
-
-    async function ensureCameraAndRestorePreview() {
-      try {
-        if (!localStream) {
-          await getCameraStream();
-          localVideo.srcObject = localStream;
-          originalVideoTrack = localStream.getVideoTracks()[0];
-        }
-        // if canvasProcessor active, currentVideoTrack may be canvas stream
-        if (canvasProcessor && canvasProcessor.stream) {
-          await replaceVideoTrack(canvasProcessor.stream.getVideoTracks()[0]);
-          localVideo.srcObject = canvasProcessor.canvas.captureStream();
-        } else {
-          const camTrack = localStream.getVideoTracks()[0];
-          if (camTrack) {
-            await replaceVideoTrack(camTrack);
-            localVideo.srcObject = localStream;
-          }
-        }
-      } catch (e) { console.error(e); }
-    }
-
-    // background picker
-    document.getElementById('bgPicker').addEventListener('click', async (ev) => {
-      const thumb = ev.target.closest('.bg-thumb');
-      if (!thumb) return;
-      const mode = thumb.dataset.bg;
-      // stop canvas processor first
-      stopCanvasProcessor();
-      if (mode === 'none') {
-        // restore camera unprocessed
-        await ensureCameraAndRestorePreview();
-      } else if (mode === 'blur') {
-        // start canvas processor in blur mode
-        startCanvasProcessor({ mode: 'blur' });
-      } else if (mode === 'img1') {
-        // a sample background image — try to load from /static, fallback to gradient
-        const img = new Image();
-        img.crossOrigin = 'anonymous';
-        img.src = '/static/gifs/beach.jpg';
-        img.onload = () => startCanvasProcessor({ mode: 'image', image: img });
-        img.onerror = () => startCanvasProcessor({ mode: 'image', image: null });
-      }
-    });
-
-    // canvas-based virtual background processor
-    function startCanvasProcessor(opts = { mode: 'blur', image: null }) {
-      if (!localStream) { console.warn('no local stream'); return; }
-      const videoTrack = localStream.getVideoTracks()[0];
-      if (!videoTrack) { console.warn('no video track'); return; }
-      // create canvas matching video size; we'll update size on the fly
-      const canvas = document.createElement('canvas');
-      const ctx = canvas.getContext('2d');
-      let raf = null;
-      let wantedWidth = 640, wantedHeight = 480;
-
-      // stop any existing
-      stopCanvasProcessor();
-
-      // draw frame loop
-      const draw = () => {
+        // Try open app deep-link first on mobile; fallback to web after a short timeout
         try {
-          const v = localVideo;
-          // if not ready size, schedule next
-          if (v.videoWidth && v.videoHeight) {
-            if (canvas.width !== v.videoWidth || canvas.height !== v.videoHeight) {
-              canvas.width = v.videoWidth;
-              canvas.height = v.videoHeight;
-            }
-            // simple approach: mode 'blur' -> draw blurred full-frame
-            if (opts.mode === 'blur') {
-              ctx.filter = 'blur(8px)';
-              ctx.drawImage(v, 0, 0, canvas.width, canvas.height);
-              // draw non-blurred center rectangle of person (approx) — this is heuristic
-              ctx.filter = 'none';
-              const cw = Math.floor(canvas.width * 0.6);
-              const ch = Math.floor(canvas.height * 0.7);
-              const cx = Math.floor((canvas.width - cw) / 2);
-              const cy = Math.floor((canvas.height - ch) / 2);
-              ctx.drawImage(v, cx, cy, cw, ch, cx, cy, cw, ch);
-            } else if (opts.mode === 'image') {
-              // draw background image first (cover)
-              if (opts.image) {
-                ctx.filter = 'none';
-                // cover math
-                const img = opts.image;
-                const arImg = img.width / img.height;
-                const arC = canvas.width / canvas.height;
-                let iw = canvas.width, ih = canvas.height, ix=0, iy=0;
-                if (arImg > arC) {
-                  ih = canvas.height; iw = arImg * ih; ix = -(iw - canvas.width)/2;
-                } else {
-                  iw = canvas.width; ih = iw / arImg; iy = -(ih - canvas.height)/2;
-                }
-                ctx.drawImage(img, ix, iy, iw, ih);
-              } else {
-                // fallback gradient
-                ctx.fillStyle = '#0a2a3a';
-                ctx.fillRect(0,0,canvas.width,canvas.height);
-              }
-              // draw foreground (video) scaled down slightly with border
-              const pad = 20;
-              const fw = canvas.width - pad*2;
-              const fh = canvas.height - pad*2;
-              ctx.drawImage(v, pad, pad, fw, fh);
-            } else {
-              // default: passthrough
-              ctx.filter = 'none';
-              ctx.drawImage(v, 0, 0, canvas.width, canvas.height);
-            }
-          }
+          window.location.href = meetUrl.replace("https://meet.google.com", "googlemeet://meet.google.com");
+          setTimeout(() => { window.open(meetUrl, "_blank", "noopener,noreferrer"); }, 1200);
         } catch (e) {
-          console.warn('canvas draw error', e);
+          window.open(meetUrl, "_blank", "noopener,noreferrer");
         }
-        raf = requestAnimationFrame(draw);
       };
 
-      draw();
+      document.getElementById("declineMeetBtn").onclick = () => {
+        banner.remove();
+        socket.emit("meet_decline", { call_id });
+      };
+    });
 
-      const outStream = canvas.captureStream(25); // 25fps
-      const outTrack = outStream.getVideoTracks()[0];
-
-      // store processor
-      canvasProcessor = { canvas, ctx, raf, stream: outStream, mode: opts.mode, image: opts.image };
-
-      // replace outgoing track
-      replaceVideoTrack(outTrack);
-      // set local preview to the canvas so user sees processed feed
-      localVideo.srcObject = outStream;
-    }
-
-    function stopCanvasProcessor() {
-      if (!canvasProcessor) return;
+    socket.on("open_meet", (data) => {
+      if (!data || !data.url) return;
+      // Try app deep link first for mobile; fallback to web version
+      const webUrl = data.url;
+      const appUrl = webUrl.replace("https://meet.google.com", "googlemeet://meet.google.com");
       try {
-        cancelAnimationFrame(canvasProcessor.raf);
-      } catch (e) {}
-      try {
-        canvasProcessor.stream.getTracks().forEach(t => t.stop());
-      } catch (e) {}
-      // restore local camera preview and outgoing track
-      canvasProcessor = null;
-      ensureCameraAndRestorePreview();
-    }
-
-    // composer send message (simple POST)
-    document.getElementById('chatInput').addEventListener('keypress', async (e)=>{
-      if (e.key === 'Enter') {
-        const txt = e.target.value.trim();
-        if (!txt) return;
-        try {
-          await fetch('/send_message', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ text: txt, sender: MYNAME }), credentials: 'include' });
-        } catch (err) { console.warn('send failed', err); }
-        e.target.value = '';
+        // Try opening app (on Android this will open the native app if installed)
+        window.location.href = appUrl;
+        setTimeout(() => { window.open(webUrl, "_blank", "noopener,noreferrer"); }, 1200);
+      } catch (e) {
+        window.open(webUrl, "_blank", "noopener,noreferrer");
       }
     });
 
-    // leave call
-    document.getElementById('btnLeave').addEventListener('click', ()=> endCall(true) );
-
-    // On page load — decide role
-    (async ()=>{
-      if (!MYNAME) { setStatus('Sign in first'); return; }
-      if (!CALL_ID) { setStatus('Missing call id'); return; }
-      const role = params.get('role');
-      const fromParam = params.get('from') || '';
-      try {
-        // eager get camera preview for UX
-        try { await getCameraStream(); localVideo.srcObject = localStream; } catch(e) {}
-        if (role === 'caller' || (fromParam && fromParam === MYNAME)) {
-          await callerStart();
-        } else {
-          setStatus('Waiting for incoming call');
-        }
-      } catch (e) { console.error(e); }
-    })();
-
-    // ensure cleanup when leaving
-    window.addEventListener('beforeunload', ()=> endCall(true) );
+    socket.on("meet_declined", ({ call_id }) => {
+      // show a small toast for caller
+      const t = document.createElement("div");
+      t.textContent = "Invite declined";
+      t.style.cssText = "position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:#111;padding:8px 12px;color:#fff;border-radius:8px;z-index:9999;";
+      document.body.appendChild(t);
+      setTimeout(()=>t.remove(), 3000);
+    });
 
   </script>
 </body>
@@ -2854,9 +2428,12 @@ CHAT_HTML = r'''<!doctype html>
       const decline = document.getElementById("waDecline");
 
       accept.onclick = () => {
-        cs.socket.emit("call_accept", { call_id, from: cs.myName });
-        banner.remove();
-        window.location.href = isVideo ? "/video_call" : "/audio_call";
+          socket.emit("call_accept", { call_id, from: MYNAME });
+          banner.remove();
+          const msg = document.createElement("div");
+          msg.textContent = "Opening meeting…";
+          msg.style.cssText = "position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:#0b5;color:#fff;padding:8px 12px;border-radius:8px;z-index:9999;";
+          document.body.appendChild(msg);
       };
 
       decline.onclick = () => {
@@ -6910,95 +6487,118 @@ def on_disconnect():
             emit('presence', {'user': u, 'online': False}, broadcast=True)
             break
 
-# ----------------- CALL SIGNALING EVENTS -----------------
 @socketio.on('call_outgoing')
 def on_call_outgoing(data):
-    """Caller initiates a call."""
+    """Caller initiates a call (video intent). Create call_id and inform participants.
+       Caller will be instructed to open Meet and share the link manually."""
     to = data.get('to')
-    isVideo = data.get('isVideo', False)
     caller = data.get('from') or 'unknown'
-    call_id = secrets.token_hex(12)
+    isVideo = data.get('isVideo', False)
+    if not to or not caller:
+        return
 
-    # Save call info
+    # generate call id and save
+    call_id = secrets.token_hex(12)
     save_call(call_id, caller, to, isVideo, status='ringing')
     CALL_INVITES[call_id] = {"caller": caller, "callee": to, "isVideo": isVideo}
 
     sid_callee = USER_SID.get(to)
     sid_caller = USER_SID.get(caller)
 
-    # ✅ If callee is online, send them an invite
+    # Inform callee that there's an incoming invite (UI banner)
     if sid_callee:
-        print(f"📞 Outgoing call from {caller} to {to} — call_id={call_id}")
-        emit(
-            'incoming_call',
-            {'from': caller, 'isVideo': isVideo, 'call_id': call_id},
-            room=sid_callee
-        )
+        emit('incoming_meet_invite', {'from': caller, 'call_id': call_id}, room=sid_callee)
     else:
-        print(f"❌ {to} is offline — cannot deliver call invite.")
+        app.logger.info("call_outgoing: callee %s offline; saved invite %s", to, call_id)
 
-    # ✅ Tell caller to open audio call page (always)
+    # Tell caller to open Google Meet (web/app) and show share UI
     if sid_caller:
-        emit(
-            'open_audio_page',
-            {'url': f"/audio_call?call_id={call_id}&role=caller&to={to}"},
-            room=sid_caller
-        )
+        emit('open_meet_creator', {'call_id': call_id}, room=sid_caller)
 
 
-@socketio.on('call_accept')
-def on_call_accept(data):
-    """Callee accepts a call."""
+@socketio.on('share_meet_invite')
+def on_share_meet_invite(data):
+    """Caller shares a Meet URL for a call_id -> forward to callee as an incoming banner with URL."""
     call_id = data.get('call_id')
-    info = CALL_INVITES.get(call_id)
-    if not info:
-        print("❌ Invalid call_id on accept.")
+    url = data.get('url')
+    if not call_id or not url:
         return
 
-    update_call_started(call_id)
-    sid_caller = USER_SID.get(info['caller'])
+    info = CALL_INVITES.get(call_id)
+    if not info:
+        return
+
     sid_callee = USER_SID.get(info['callee'])
-
-    # ✅ Tell the caller that the call is accepted and callee is ready
-    if sid_caller:
-        emit('call_accepted', {'call_id': call_id, 'from': info['callee']}, room=sid_caller)
-
-    # ✅ Open pages automatically:
-    # Caller: stays in audio call page (already there)
-    # Callee: open video call page
     if sid_callee:
-        emit(
-            'open_video_page',
-            {'url': f"/video_call?call_id={call_id}&role=callee&from={info['caller']}"},
-            room=sid_callee
-        )
+        emit('incoming_meet_invite', {
+            'from': info['caller'],
+            'call_id': call_id,
+            'url': url
+        }, room=sid_callee)
+    else:
+        app.logger.info("share_meet_invite: callee offline for call_id %s", call_id)
 
 
-@socketio.on('call_decline')
-def on_call_decline(data):
-    """Callee declines call."""
+@socketio.on('meet_accept')
+def on_meet_accept(data):
+    """Callee accepted the Meet invite; open the shared Meet URL on both sides."""
     call_id = data.get('call_id')
-    info = CALL_INVITES.get(call_id)
+    meet_url = data.get('url')
+    if not call_id or not meet_url:
+        return
+
+    info = CALL_INVITES.pop(call_id, None)
     if not info:
         return
-    save_call(call_id, info['caller'], info['callee'], 0, status='declined')
-    sid_caller = USER_SID.get(info['caller'])
+
+    # mark started/accepted in DB/logs
+    update_call_started(call_id)
+
+    sid_caller = USER_SID.get(info.get('caller'))
+    sid_callee = USER_SID.get(info.get('callee'))
+
+    # Emit the same URL to both participants so they join the same meeting
     if sid_caller:
-        emit('call_declined', {'call_id': call_id}, room=sid_caller)
-    CALL_INVITES.pop(call_id, None)
+        emit('open_meet', {'url': meet_url}, room=sid_caller)
+    if sid_callee:
+        emit('open_meet', {'url': meet_url}, room=sid_callee)
+
+    # Optional: legacy event for caller UI
+    if sid_caller:
+        emit('call_accepted', {'call_id': call_id, 'from': info.get('callee')}, room=sid_caller)
+
+    app.logger.info("meet_accept: call %s accepted, open_meet -> %s", call_id, meet_url)
+
+
+@socketio.on('meet_decline')
+def on_meet_decline(data):
+    """Callee declines the meet invite; notify caller and cleanup."""
+    call_id = data.get('call_id')
+    info = CALL_INVITES.pop(call_id, None)
+    if not info:
+        return
+    sid_caller = USER_SID.get(info.get('caller'))
+    if sid_caller:
+        emit('meet_declined', {'call_id': call_id}, room=sid_caller)
+    save_call(call_id, info['caller'], info['callee'], 0, status='declined')
+    app.logger.info("meet_decline: call %s declined by %s", call_id, info.get('callee'))
 
 
 @socketio.on('call_end')
 def on_call_end(data):
-    """Either side ends the call."""
+    """Either side ends an in-progress call. Notify the other side."""
     call_id = data.get('call_id')
-    update_call_ended(call_id)
+    try:
+        update_call_ended(call_id)
+    except Exception:
+        app.logger.exception("call_end: update failed for %s", call_id)
 
     log = fetch_call_log_by_id(call_id)
     if log and log.get('started_at') and log.get('ended_at'):
         duration = log['ended_at'] - log['started_at']
-        socketio.emit('call_summary', {'duration': duration, 'isVideo': log['is_video']})
+        socketio.emit('call_summary', {'duration': duration, 'isVideo': log.get('is_video', False)})
 
+    # Clean up invites if any
     info = CALL_INVITES.pop(call_id, None)
     if info:
         sid_caller = USER_SID.get(info.get('caller'))
@@ -7007,6 +6607,7 @@ def on_call_end(data):
             emit('call_ended', {'call_id': call_id}, room=sid_caller)
         if sid_callee:
             emit('call_ended', {'call_id': call_id}, room=sid_callee)
+# --- end of CALL / MEET SIGNALING block ---
 
 # WebRTC signaling passthrough
 @socketio.on('webrtc_offer')
