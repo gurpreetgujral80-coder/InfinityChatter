@@ -2143,6 +2143,18 @@ CHAT_HTML = r'''<!doctype html>
     #waIncomingBanner>div, #waOutgoingBanner>div {
       animation: slideDown 0.3s ease-out;
     }
+    .incoming-meet-banner{
+      position:fixed;bottom:0;left:0;right:0;
+      background:#f7f9ff;
+      border-top:2px solid #4285F4;
+      display:flex;justify-content:center;
+      padding:12px;z-index:9999;
+      box-shadow:0 -2px 6px rgba(0,0,0,0.1);
+    }
+    .banner-content{display:flex;align-items:center;gap:12px;}
+    .banner-actions button{font-size:14px;padding:4px 10px;border-radius:6px;border:none;cursor:pointer;}
+    .accept-btn{background:#34A853;color:white;}
+    .decline-btn{background:#EA4335;color:white;}
   </style>
 </head>
 <body>
@@ -2181,19 +2193,6 @@ CHAT_HTML = r'''<!doctype html>
           </div>
         </div>
 
-        <!-- Outgoing call banner that overlaps header (caller view) -->
-        <div id="outgoingCallBanner" class="incoming-call-banner hidden" style="background:#fff9; top:calc(var(--header-height,56px) + 8px); z-index:230;">
-          <div class="banner-content" style="display:flex;justify-content:space-between;align-items:center;">
-            <div class="caller-info">
-              <span id="outgoingLabel">Calling</span>
-              <span id="outgoingCalleeName" style="font-weight:700"></span>
-            </div>
-            <div class="banner-buttons">
-              <button id="cancelOutgoingBtn" class="btn-decline">Cancel</button>
-            </div>
-          </div>
-        </div>
-
         <div class="header-actions" role="navigation" aria-label="Profile actions">
           <div id="profileBtn" class="profile-name">{{ username }}</div>
           <div id="profileMenu" class="menu hidden"
@@ -2205,6 +2204,12 @@ CHAT_HTML = r'''<!doctype html>
           </div>
         </div>
       </header>
+      <div id="meetShareBox" class="hidden" style="position:fixed;bottom:20px;right:20px;background:#fff;border-radius:12px;box-shadow:0 0 12px rgba(0,0,0,0.15);padding:14px;z-index:999;">
+          <div style="font-weight:600;margin-bottom:8px;">Share Google Meet Link</div>
+          <input id="meetShareInput" type="text" placeholder="Paste your Meet link here" style="width:240px;padding:6px;border:1px solid #ccc;border-radius:6px;">
+          <button id="meetShareBtn" style="margin-left:8px;background:#4285F4;color:#fff;border:none;padding:6px 10px;border-radius:6px;">Share</button>
+      </div>
+
       <div id="chat-wrap" style="position:relative; min-height:360px; display:flex; flex-direction:column; top:6.5rem; overflow-y: auto;">
             <div id="messages" class="mb-6" aria-live="polite" style="padding: 12px;"></div>
 
@@ -5073,132 +5078,145 @@ window.sendMessage = sendMessage;
       const closeProfile = $id('closeProfile'); if (closeProfile) closeProfile.addEventListener('click', () => { const modal = $id('profileModal'); if (modal) modal.classList.add('hidden'); });
       const profileCancel = $id('profileCancel'); if (profileCancel) profileCancel.addEventListener('click', () => { const modal = $id('profileModal'); if (modal) modal.classList.add('hidden'); });
 
-      // incoming call controls
-      if (acceptCallBtn) {
-        acceptCallBtn.addEventListener('click', () => {
-          if (!cs.activeCallId) return;
-          cs.socket && cs.socket.emit('call:accept', { call_id: cs.activeCallId, from: cs.myName });
-          incomingCallBanner && incomingCallBanner.classList.add('hidden');
-          inCallControls && inCallControls.classList.remove('hidden');
-        });
-      }
-      if (declineCallBtn) {
-        declineCallBtn.addEventListener('click', () => {
-          if (!cs.activeCallId) return;
-          cs.socket && cs.socket.emit('call:hangup', { call_id: cs.activeCallId, from: cs.myName });
-          incomingCallBanner && incomingCallBanner.classList.add('hidden');
-          cs.activeCallId = null;
-        });
-      }
+      // ------------------- GOOGLE MEET CALL FLOW -------------------
 
-      if (btnHangup) btnHangup.addEventListener('click', () => { if (cs.activeCallId) endCall && endCall(cs.activeCallId); inCallControls && inCallControls.classList.add('hidden'); });
-      if (btnMute) btnMute.addEventListener('click', () => { if (cs.activeCallId) toggleMute && toggleMute(cs.activeCallId); });
-      if (btnToggleVideo) btnToggleVideo.addEventListener('click', () => { if (cs.activeCallId) toggleVideo && toggleVideo(cs.activeCallId); });
-      if (btnSwitchCam) btnSwitchCam.addEventListener('click', () => { if (cs.activeCallId) switchCamera && switchCamera(cs.activeCallId); });
+        // quick DOM helpers
+        function $id(id) { return document.getElementById(id); }
+        function showEl(id){ const e = $id(id); if(e) e.classList.remove('hidden'); }
+        function hideEl(id){ const e = $id(id); if(e) e.classList.add('hidden'); }
 
-      // header call buttons
-      const audioBtn = $id('audioCallBtn'), videoBtn = $id('videoCallBtn');
-      if (audioBtn) audioBtn.addEventListener('click', (e) => { e.preventDefault(); openOnlineUsers && openOnlineUsers('audio'); });
-      if (videoBtn) videoBtn.addEventListener('click', (e) => { e.preventDefault(); openOnlineUsers && openOnlineUsers('video'); });
-
-        function showEl(id){ const e = document.getElementById(id); if(e) e.classList.remove('hidden'); }
-        function hideEl(id){ const e = document.getElementById(id); if(e) e.classList.add('hidden'); }
-
-        // Inserted modal DOM is already added server-side above; wire UI:
+        // UI elements
         const onlineUsersModal = $id('onlineUsersModal');
         const onlineUsersList = $id('onlineUsersList');
         const closeOnlineUsers = $id('closeOnlineUsers');
-        const outgoingCallBanner = $id('outgoingCallBanner');
-        const outgoingCalleeName = $id('outgoingCalleeName');
-        const cancelOutgoingBtn = $id('cancelOutgoingBtn');
+        const meetShareBox = $id('meetShareBox'); // a small div with input+button (see below)
+        const meetShareInput = $id('meetShareInput');
+        const meetShareBtn = $id('meetShareBtn');
 
-        let pendingCallType = 'audio'; // 'audio' or 'video'
+        // header call buttons
+        const audioBtn = $id('audioCallBtn');
+        const videoBtn = $id('videoCallBtn');
+        if(audioBtn) audioBtn.addEventListener('click', e => { e.preventDefault(); openOnlineUsers('audio'); });
+        if(videoBtn) videoBtn.addEventListener('click', e => { e.preventDefault(); openOnlineUsers('video'); });
+
+        // internal state
+        let pendingCallType = 'audio';
         let pendingTargetUser = null;
         let pendingCallId = null;
 
-        // request online users and show modal
-        function openOnlineUsers(type){
+        // open modal of online users
+        function openOnlineUsers(type) {
           pendingCallType = type || 'audio';
+          pendingTargetUser = null;
+
+          // Clear old list while waiting
+          onlineUsersList.innerHTML = '<div style="padding:12px;color:#666">Loading online users...</div>';
+
+          // Send fresh request to server
           cs.socket && cs.socket.emit && cs.socket.emit('get_online_users');
+
+          // Set a short timeout to show modal after data arrives
           showEl('onlineUsersModal');
         }
 
-        // render incoming users list (server will send 'online_users')
-        cs.socket && cs.socket.on && cs.socket.on('online_users', (d) => {
+        // Handle new list from server
+        cs.socket && cs.socket.on && cs.socket.on('online_users', (data) => {
           try {
-            const users = (d && d.users) ? d.users.slice() : [];
+            const users = (data && data.users) ? data.users.slice() : [];
             onlineUsersList.innerHTML = '';
+
+            if (!users.length) {
+              onlineUsersList.innerHTML = '<div style="padding:12px;color:#666">No users online</div>';
+              return;
+            }
+
             users.sort();
-            for (const u of users){
-              if(!u || u === cs.myName) continue; // don't show self
+            for (const u of users) {
+              if (!u || u === cs.myName) continue; // skip self
               const tile = document.createElement('div');
               tile.className = 'online-user-tile';
-              tile.innerHTML = `<div style="width:40px;height:40px;border-radius:50%;background:#eef;display:flex;align-items:center;justify-content:center;font-weight:700">${escapeHtml(u[0]||'U')}</div>
-                                <div style="flex:1">${escapeHtml(u)}</div>
-                                <div style="font-size:.9rem;opacity:.85">${pendingCallType === 'video' ? 'Video' : 'Audio'}</div>`;
-              tile.addEventListener('click', async () => {
-                // start outgoing call to user u
-                pendingTargetUser = u;
-                // show outgoing banner
-                outgoingCalleeName.textContent = u;
-                showEl('outgoingCallBanner');
-                hideEl('onlineUsersModal');
+              tile.innerHTML = `
+                <div style="width:40px;height:40px;border-radius:50%;background:#eef;display:flex;align-items:center;justify-content:center;font-weight:700">
+                  ${escapeHtml(u[0] || 'U')}
+                </div>
+                <div style="flex:1">${escapeHtml(u)}</div>
+                <div style="font-size:.9rem;opacity:.85">
+                  ${pendingCallType === 'video' ? 'Video' : 'Audio'}
+                </div>`;
 
-                // emit existing server event for outgoing
-                cs.socket && cs.socket.emit && cs.socket.emit('call_outgoing', { to: u, isVideo: (pendingCallType === 'video'), from: cs.myName });
-
-                showWhatsAppOutgoingBanner(peerName, isVideo);
-
-                // create a local pending call id (server will also make one)
-                pendingCallId = 'call-' + Date.now() + '-' + Math.random().toString(36).slice(2,8);
-                // store in cs so other handlers can access
-                cs.pendingCall = { id: pendingCallId, to: u, isVideo: (pendingCallType === 'video') };
-
-                // optional: show a small in-page UI (you already have in-call controls)
-                setTimeout(()=> {
-                  // if call is accepted server will notify; otherwise user can cancel
-                }, 400);
-              });
+              tile.addEventListener('click', () => startMeetCall(u));
               onlineUsersList.appendChild(tile);
             }
-            if(!onlineUsersList.children.length){
-              onlineUsersList.innerHTML = '<div style="padding:12px;color:#666">No other users online</div>';
-            }
-          } catch(e){ console.warn('online_users render err', e); }
-        });
-
-        // cancel button
-        closeOnlineUsers && closeOnlineUsers.addEventListener('click', ()=> hideEl('onlineUsersModal') );
-        cancelOutgoingBtn && cancelOutgoingBtn.addEventListener('click', ()=>{
-          // cancel the outgoing call flow
-          if(cs.pendingCall){
-            cs.socket && cs.socket.emit && cs.socket.emit('call_decline', { call_id: cs.pendingCall.id, from: cs.myName });
-            cs.pendingCall = null;
+          } catch (err) {
+            console.warn('online_users render error', err);
+            onlineUsersList.innerHTML = '<div style="padding:12px;color:#c00">Error loading users</div>';
           }
-          hideEl('outgoingCallBanner');
         });
 
-        // When server notifies caller that callee accepted the call, navigate to call page
-        cs.socket && cs.socket.on && cs.socket.on('call_accepted', (d)=>{
-          try{
-            // server side may send call_id and from
-            const callId = d && d.call_id ? d.call_id : (cs.pendingCall && cs.pendingCall.id) || '';
-            const isVideo = (cs.pendingCall && cs.pendingCall.isVideo) || false;
-            // navigate to dedicated page
-            const page = isVideo ? '/video_call' : '/audio_call';
-            const q = `?call_id=${encodeURIComponent(callId)}&to=${encodeURIComponent((cs.pendingCall && cs.pendingCall.to) || '')}`;
-            // hide UI and redirect
-            hideEl('outgoingCallBanner');
-            cs.pendingCall = null;
-            window.location.href = page + q;
-          }catch(e){ console.warn('call_accepted handler error', e); }
+        closeOnlineUsers && closeOnlineUsers.addEventListener('click', ()=> hideEl('onlineUsersModal') );
+
+        // caller starts Meet call
+        function startMeetCall(username){
+          pendingTargetUser = username;
+          pendingCallId = 'call-' + Date.now() + '-' + Math.random().toString(36).slice(2,8);
+          hideEl('onlineUsersModal');
+
+          // notify server a call is starting
+          cs.socket.emit('call_outgoing', { to: username, from: cs.myName, isVideo: (pendingCallType==='video') });
+
+          // open Meet in new tab
+          window.open('https://meet.google.com/new', '_blank');
+
+          // show local box to paste/share link
+          showEl('meetShareBox');
+          meetShareInput.value = '';
+        }
+
+        // when user clicks share
+        meetShareBtn && meetShareBtn.addEventListener('click', () => {
+          const link = meetShareInput.value.trim();
+          if(!link || !pendingTargetUser) return alert('Paste the Meet link first.');
+          cs.socket.emit('share_meet_invite', {
+            call_id: pendingCallId,
+            to: pendingTargetUser,
+            from: cs.myName,
+            url: link
+          });
+          hideEl('meetShareBox');
+          alert('Meet link sent to ' + pendingTargetUser);
         });
 
-        // hook call buttons in header (audio / video buttons)
-        const audioCallBtnEl = $id('audioCallBtn');
-        const videoCallBtnEl = $id('videoCallBtn');
-        if(audioCallBtnEl) audioCallBtnEl.addEventListener('click', (ev)=> { ev.preventDefault(); openOnlineUsers('audio'); });
-        if(videoCallBtnEl) videoCallBtnEl.addEventListener('click', (ev)=> { ev.preventDefault(); openOnlineUsers('video'); });
+        // receiver sees banner
+        cs.socket.on('incoming_meet_invite', data => {
+          const { from, url, call_id } = data;
+          const banner = document.createElement('div');
+          banner.className = 'incoming-meet-banner';
+          banner.innerHTML = `
+            <div class="banner-content">
+              <span><b>${escapeHtml(from)}</b> is inviting you to a Meet call</span>
+              <div class="banner-actions">
+                <button id="acceptMeetBtn" class="accept-btn">✅ Accept</button>
+                <button id="declineMeetBtn" class="decline-btn">❌ Decline</button>
+              </div>
+            </div>`;
+          document.body.appendChild(banner);
+
+          $id('acceptMeetBtn').onclick = () => {
+            cs.socket.emit('meet_accept', { call_id, url });
+            banner.remove();
+            window.open(url, '_blank');
+          };
+          $id('declineMeetBtn').onclick = () => {
+            cs.socket.emit('meet_decline', { call_id });
+            banner.remove();
+          };
+        });
+
+        // caller & callee get this when accepted
+        cs.socket.on('open_meet', d => {
+          if(!d || !d.url) return;
+          window.open(d.url, '_blank');
+        });
 
       // close emoji/other drawers on background click
       document.addEventListener('click', (ev) => {
