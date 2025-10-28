@@ -1,3 +1,4 @@
+import eventlet
 eventlet.monkey_patch()
 import os
 import sqlite3
@@ -11,7 +12,6 @@ import hmac
 import pathlib
 import base64
 import requests
-import eventlet
 from datetime import datetime
 from flask import (
     Flask, render_template_string, request, jsonify, session, current_app,
