@@ -1337,48 +1337,6 @@ CONTACTS_HTML = r'''<!doctype html>
 def inbox_page():
     return render_template_string(CONTACTS_HTML)
 
-@app.route('/contacts_list')
-def contacts_list_api():
-    # current user from session (fallback to query param)
-    username = flask_session.get('username') or request.args.get('username')
-    if not username:
-        # demo data
-        return jsonify({'contacts': [
-            {'contact':'alice','name':'Alice','last_text':'Hey!','last_ts': int(time.time())-60, 'avatar_url': '/avatar/alice'},
-            {'contact':'bob','name':'Bob','last_text':'See you','last_ts': int(time.time())-3600, 'avatar_url': '/avatar/bob'}
-        ]})
-
-    try:
-        conn = sqlite3.connect(DB_PATH)
-        cur = conn.cursor()
-        # find last message per sender (excluding the current user)
-        cur.execute("""
-            SELECT m.sender AS contact, m.text AS last_text, m.created_at AS last_ts
-            FROM messages m
-            JOIN (
-              SELECT sender, MAX(created_at) AS mx FROM messages WHERE sender != ? GROUP BY sender
-            ) t ON t.sender = m.sender AND m.created_at = t.mx
-            ORDER BY m.created_at DESC
-        """, (username,))
-        rows = cur.fetchall()
-        contacts = []
-        for r in rows:
-            contact = r[0]
-            contacts.append({
-                'contact': contact,
-                'name': contact,
-                'last_text': r[1] or '',
-                'last_ts': int(r[2]) if r[2] else None,
-                'avatar_url': f'/avatar/{contact}'
-            })
-        conn.close()
-        return jsonify({'contacts': contacts})
-    except Exception as e:
-        current_app.logger.exception('contacts_list error')
-        return jsonify({'contacts': [
-            {'contact':'alice','name':'Alice','last_text':'Hey!','last_ts': int(time.time())-60, 'avatar_url': '/avatar/alice'},
-            {'contact':'bob','name':'Bob','last_text':'See you','last_ts': int(time.time())-3600, 'avatar_url': '/avatar/bob'}
-        ]})
 # ---------- END contacts/inbox addition ----------
 LOGIN_HTML = r'''<!doctype html>
 <html>
