@@ -1,3 +1,4 @@
+eventlet.monkey_patch()
 import os
 import sqlite3
 import secrets
@@ -19,10 +20,6 @@ from flask import (
 from werkzeug.utils import secure_filename
 from flask_socketio import SocketIO, emit, join_room, leave_room
 from pywebpush import webpush, WebPushException
-
-eventlet.monkey_patch()
-
-import os
 from dotenv import load_dotenv
 
 load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
@@ -1244,6 +1241,207 @@ def proxy_dicebear():
         return f"error: {e}", 500
 
 # ---------- Templates (INDEX_HTML unchanged) ----------
+
+
+# ---------- Contacts / Inbox page & API (added) ----------
+from flask import session as flask_session
+
+CONTACTS_HTML = r'''<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>InfinityChatter — Inbox</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    header.inbox-header {
+      position: fixed;
+      top:0; left:0; right:0;
+      height:64px;
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      background: rgba(255,255,255,0.9);
+      backdrop-filter: blur(6px);
+      box-shadow: 0 1px 8px rgba(2,6,23,0.06);
+      z-index:50;
+    }
+    main.inbox-main {
+      padding: 84px 16px 96px;
+      max-width:960px;
+      margin: 0 auto;
+    }
+    .contact-card {
+      display:flex;
+      gap:12px;
+      align-items:center;
+      padding:12px;
+      border-radius:12px;
+      background: rgba(255,255,255,0.85);
+      box-shadow: 0 6px 20px rgba(2,6,23,0.04);
+      margin-bottom:12px;
+      cursor:pointer;
+      transition: transform .12s ease, box-shadow .12s ease;
+    }
+    .contact-card:hover { transform: translateY(-4px); box-shadow: 0 12px 30px rgba(2,6,23,0.08); }
+    .contact-avatar {
+      width:56px; height:56px; border-radius:12px; overflow:hidden; flex:0 0 56px;
+      background: linear-gradient(135deg,#eef2ff,#fef3c7);
+      display:flex;align-items:center;justify-content:center;font-weight:700;color:#1f2937;
+      font-size:1.05rem;
+    }
+    .contact-info { flex:1; min-width:0; }
+    .contact-name { font-weight:700; font-size:1rem; color:#0f172a; }
+    .contact-last { color:#64748b; font-size:0.9rem; margin-top:4px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .bottom-nav {
+      position: fixed;
+      left: 50%;
+      transform: translateX(-50%);
+      bottom: 16px;
+      width: min(760px, calc(100% - 36px));
+      background: rgba(255,255,255,0.6);
+      backdrop-filter: blur(8px);
+      border-radius: 18px;
+      padding: 8px 14px;
+      box-shadow: 0 10px 30px rgba(2,6,23,0.12);
+      display:flex;
+      justify-content:space-around;
+      align-items:center;
+      z-index:60;
+    }
+    .nav-item { display:flex; flex-direction:column; align-items:center; gap:4px; color:#0f172a; font-size:0.9rem; cursor:pointer; padding:6px 8px; border-radius:10px; }
+    .nav-item .icon { font-size:1.25rem; }
+    @media (max-width:480px) {
+      .contact-avatar { width:48px; height:48px; border-radius:10px; font-size:0.95rem; }
+      header.inbox-header { height:64px; padding:8px; }
+      main.inbox-main { padding: 84px 12px 110px; }
+    }
+  </style>
+</head>
+<body>
+  <header class="inbox-header">
+    <div style="text-align:center; width:100%; max-width:980px;">
+      <div class="heading-wrapper">
+        <div class="heading-title" style="font-weight:800; font-size:18px;">InfinityChatter</div>
+      </div>
+    </div>
+  </header>
+
+  <main class="inbox-main" id="inboxMain">
+    <div id="contactsContainer">
+      <div style="padding:18px;color:#64748b">Loading contacts…</div>
+    </div>
+  </main>
+
+  <div class="bottom-nav" role="navigation" aria-label="Main navigation">
+    <div class="nav-item" id="nav-calls"><div class="icon">📞</div><div>Calls</div></div>
+    <div class="nav-item" id="nav-profile"><div class="icon">👤</div><div>Profile</div></div>
+    <div class="nav-item" id="nav-chats"><div class="icon">💬</div><div>Chats</div></div>
+    <div class="nav-item" id="nav-settings"><div class="icon">⚙️</div><div>Settings</div></div>
+  </div>
+
+<script>
+(async function(){
+  function escapeHtml(s){ return (s||'').toString().replace(/[&<>"']/g, c=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+  async function loadContacts(){
+    try {
+      const resp = await fetch('/contacts_list', { credentials: 'same-origin' });
+      if(!resp.ok) throw new Error('failed');
+      const data = await resp.json();
+      renderContacts(data.contacts || []);
+    } catch (err) {
+      document.getElementById('contactsContainer').innerHTML = '<div style="padding:18px;color:#c00">Unable to load contacts</div>';
+      console.error('loadContacts', err);
+    }
+  }
+
+  function renderContacts(list){
+    const container = document.getElementById('contactsContainer');
+    container.innerHTML = '';
+    if(!list.length){
+      container.innerHTML = '<div style="padding:18px;color:#64748b">No contacts yet</div>';
+      return;
+    }
+    list.forEach(item=>{
+      const div = document.createElement('div');
+      div.className = 'contact-card';
+      div.innerHTML = `
+        <div class="contact-avatar">
+          ${ item.avatar_url ? `<img src="${escapeHtml(item.avatar_url)}" style="width:56px;height:56px;object-fit:cover;border-radius:10px;" />` : escapeHtml((item.name||'')[0]||'?') }
+        </div>
+        <div class="contact-info">
+          <div class="contact-name">${escapeHtml(item.name || item.contact)}</div>
+          <div class="contact-last">${escapeHtml(item.last_text || '')}</div>
+        </div>
+        <div style="text-align:right;color:#94a3b8;font-size:0.85rem">${item.last_ts ? new Date(item.last_ts*1000).toLocaleString() : ''}</div>
+      `;
+      div.addEventListener('click', ()=> {
+        const peer = encodeURIComponent(item.contact);
+        window.location.href = '/chat?peer=' + peer;
+      });
+      container.appendChild(div);
+    });
+  }
+
+  document.getElementById('nav-calls').addEventListener('click', ()=> { window.location.href = '/calls' });
+  document.getElementById('nav-profile').addEventListener('click', ()=> { window.location.href = '/profile' });
+  document.getElementById('nav-chats').addEventListener('click', ()=> { window.location.href = '/inbox' });
+  document.getElementById('nav-settings').addEventListener('click', ()=> { window.location.href = '/settings' });
+
+  await loadContacts();
+})();
+</script>
+</body>
+</html>
+'''
+
+@app.route('/inbox')
+def inbox_page():
+    return render_template_string(CONTACTS_HTML)
+
+@app.route('/contacts_list')
+def contacts_list_api():
+    # current user from session (fallback to query param)
+    username = flask_session.get('username') or request.args.get('username')
+    if not username:
+        # demo data
+        return jsonify({'contacts': [
+            {'contact':'alice','name':'Alice','last_text':'Hey!','last_ts': int(time.time())-60, 'avatar_url': '/avatar/alice'},
+            {'contact':'bob','name':'Bob','last_text':'See you','last_ts': int(time.time())-3600, 'avatar_url': '/avatar/bob'}
+        ]})
+
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cur = conn.cursor()
+        # find last message per sender (excluding the current user)
+        cur.execute(\"\"\"
+            SELECT m.sender AS contact, m.text AS last_text, m.created_at AS last_ts
+            FROM messages m
+            JOIN (
+              SELECT sender, MAX(created_at) AS mx FROM messages WHERE sender != ? GROUP BY sender
+            ) t ON t.sender = m.sender AND m.created_at = t.mx
+            ORDER BY m.created_at DESC
+        \"\"\", (username,))
+        rows = cur.fetchall()
+        contacts = []
+        for r in rows:
+            contact = r[0]
+            contacts.append({
+                'contact': contact,
+                'name': contact,
+                'last_text': r[1] or '',
+                'last_ts': int(r[2]) if r[2] else None,
+                'avatar_url': f'/avatar/{contact}'
+            })
+        conn.close()
+        return jsonify({'contacts': contacts})
+    except Exception as e:
+        current_app.logger.exception('contacts_list error')
+        return jsonify({'contacts': [
+            {'contact':'alice','name':'Alice','last_text':'Hey!','last_ts': int(time.time())-60, 'avatar_url': '/avatar/alice'},
+            {'contact':'bob','name':'Bob','last_text':'See you','last_ts': int(time.time())-3600, 'avatar_url': '/avatar/bob'}
+        ]})
+# ---------- END contacts/inbox addition ----------
 INDEX_HTML = r'''<!doctype html>
 <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1" />
 <title>InfinityChatter ♾️ — Login</title>
