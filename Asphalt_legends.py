@@ -1414,14 +1414,14 @@ def contacts_list_api():
         conn = sqlite3.connect(DB_PATH)
         cur = conn.cursor()
         # find last message per sender (excluding the current user)
-        cur.execute(\"\"\"
+        cur.execute("""
             SELECT m.sender AS contact, m.text AS last_text, m.created_at AS last_ts
             FROM messages m
             JOIN (
               SELECT sender, MAX(created_at) AS mx FROM messages WHERE sender != ? GROUP BY sender
             ) t ON t.sender = m.sender AND m.created_at = t.mx
             ORDER BY m.created_at DESC
-        \"\"\", (username,))
+        """, (username,))
         rows = cur.fetchall()
         contacts = []
         for r in rows:
