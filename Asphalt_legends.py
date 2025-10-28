@@ -1240,12 +1240,6 @@ def proxy_dicebear():
         current_app.logger.exception("proxy_dicebear error")
         return f"error: {e}", 500
 
-# ---------- Templates (INDEX_HTML unchanged) ----------
-
-
-# ---------- Contacts / Inbox page & API (added) ----------
-from flask import session as flask_session
-
 CONTACTS_HTML = r'''<!doctype html>
 <html>
 <head>
@@ -1254,95 +1248,45 @@ CONTACTS_HTML = r'''<!doctype html>
   <title>InfinityChatter — Inbox</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <style>
-    header.inbox-header {
-      position: fixed;
-      top:0; left:0; right:0;
-      height:64px;
-      display:flex;
-      align-items:center;
-      justify-content:center;
-      background: rgba(255,255,255,0.9);
-      backdrop-filter: blur(6px);
-      box-shadow: 0 1px 8px rgba(2,6,23,0.06);
-      z-index:50;
-    }
-    main.inbox-main {
-      padding: 84px 16px 96px;
-      max-width:960px;
-      margin: 0 auto;
-    }
-    .contact-card {
-      display:flex;
-      gap:12px;
-      align-items:center;
-      padding:12px;
-      border-radius:12px;
-      background: rgba(255,255,255,0.85);
-      box-shadow: 0 6px 20px rgba(2,6,23,0.04);
-      margin-bottom:12px;
-      cursor:pointer;
-      transition: transform .12s ease, box-shadow .12s ease;
-    }
-    .contact-card:hover { transform: translateY(-4px); box-shadow: 0 12px 30px rgba(2,6,23,0.08); }
-    .contact-avatar {
-      width:56px; height:56px; border-radius:12px; overflow:hidden; flex:0 0 56px;
-      background: linear-gradient(135deg,#eef2ff,#fef3c7);
-      display:flex;align-items:center;justify-content:center;font-weight:700;color:#1f2937;
-      font-size:1.05rem;
-    }
-    .contact-info { flex:1; min-width:0; }
-    .contact-name { font-weight:700; font-size:1rem; color:#0f172a; }
-    .contact-last { color:#64748b; font-size:0.9rem; margin-top:4px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-    .bottom-nav {
-      position: fixed;
-      left: 50%;
-      transform: translateX(-50%);
-      bottom: 16px;
-      width: min(760px, calc(100% - 36px));
-      background: rgba(255,255,255,0.6);
-      backdrop-filter: blur(8px);
-      border-radius: 18px;
-      padding: 8px 14px;
-      box-shadow: 0 10px 30px rgba(2,6,23,0.12);
-      display:flex;
-      justify-content:space-around;
-      align-items:center;
-      z-index:60;
-    }
-    .nav-item { display:flex; flex-direction:column; align-items:center; gap:4px; color:#0f172a; font-size:0.9rem; cursor:pointer; padding:6px 8px; border-radius:10px; }
-    .nav-item .icon { font-size:1.25rem; }
-    @media (max-width:480px) {
-      .contact-avatar { width:48px; height:48px; border-radius:10px; font-size:0.95rem; }
-      header.inbox-header { height:64px; padding:8px; }
-      main.inbox-main { padding: 84px 12px 110px; }
-    }
+    header.inbox-header { position:fixed; top:0; left:0; right:0; height:64px; display:flex; align-items:center; justify-content:center; background: rgba(255,255,255,0.9); backdrop-filter: blur(6px); z-index:50; box-shadow:0 1px 6px rgba(0,0,0,0.04); }
+    main.inbox-main { padding:84px 16px 110px; max-width:980px; margin:0 auto; }
+    .contact-card { display:flex; gap:12px; align-items:center; padding:12px; border-radius:12px; margin-bottom:12px; background:#fff; cursor:pointer; box-shadow:0 6px 18px rgba(2,6,23,0.04); }
+    .contact-avatar{ width:56px; height:56px; border-radius:12px; overflow:hidden; display:flex; align-items:center; justify-content:center; background:#eef; font-weight:700; }
+    .bottom-nav{ position:fixed; left:50%; transform:translateX(-50%); bottom:16px; width: min(760px, calc(100% - 36px)); background: rgba(255,255,255,0.65); backdrop-filter: blur(8px); border-radius:18px; padding:8px 14px; display:flex; justify-content:space-around; align-items:center; z-index:60; }
+    .nav-item{ display:flex; flex-direction:column; align-items:center; font-size:0.9rem; color:#0f172a; cursor:pointer; padding:6px 8px; border-radius:10px; }
   </style>
 </head>
 <body>
   <header class="inbox-header">
-    <div style="text-align:center; width:100%; max-width:980px;">
-      <div class="heading-wrapper">
-        <div class="heading-title" style="font-weight:800; font-size:18px;">InfinityChatter</div>
-      </div>
+    <div style="width:100%;max-width:980px;text-align:center;">
+      <div style="font-weight:800;font-size:18px;">InfinityChatter</div>
+      <div style="font-size:0.9rem;color:#64748b;margin-top:2px;">👋 <span id="myNameHeader"></span></div>
     </div>
   </header>
 
-  <main class="inbox-main" id="inboxMain">
+  <main class="inbox-main">
     <div id="contactsContainer">
       <div style="padding:18px;color:#64748b">Loading contacts…</div>
     </div>
   </main>
 
-  <div class="bottom-nav" role="navigation" aria-label="Main navigation">
-    <div class="nav-item" id="nav-calls"><div class="icon">📞</div><div>Calls</div></div>
-    <div class="nav-item" id="nav-profile"><div class="icon">👤</div><div>Profile</div></div>
-    <div class="nav-item" id="nav-chats"><div class="icon">💬</div><div>Chats</div></div>
-    <div class="nav-item" id="nav-settings"><div class="icon">⚙️</div><div>Settings</div></div>
+  <div class="bottom-nav" role="navigation">
+    <div class="nav-item" id="nav-calls">📞<div>Calls</div></div>
+    <div class="nav-item" id="nav-profile">👤<div>Profile</div></div>
+    <div class="nav-item" id="nav-chats">💬<div>Chats</div></div>
+    <div class="nav-item" id="nav-settings">⚙️<div>Settings</div></div>
   </div>
 
 <script>
-(async function(){
+(function(){
+  // ensure user has local profile
+  const profile = JSON.parse(localStorage.getItem('infinity_profile')||'{}');
+  if(!profile.name){ window.location.href = '/login'; return; }
+  document.getElementById('myNameHeader').textContent = profile.name || '';
+
+  // helper escape
   function escapeHtml(s){ return (s||'').toString().replace(/[&<>"']/g, c=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
   async function loadContacts(){
     try {
       const resp = await fetch('/contacts_list', { credentials: 'same-origin' });
@@ -1363,32 +1307,26 @@ CONTACTS_HTML = r'''<!doctype html>
       return;
     }
     list.forEach(item=>{
-      const div = document.createElement('div');
-      div.className = 'contact-card';
-      div.innerHTML = `
-        <div class="contact-avatar">
-          ${ item.avatar_url ? `<img src="${escapeHtml(item.avatar_url)}" style="width:56px;height:56px;object-fit:cover;border-radius:10px;" />` : escapeHtml((item.name||'')[0]||'?') }
+      const card = document.createElement('div');
+      card.className = 'contact-card';
+      card.innerHTML = `
+        <div class="contact-avatar">${ item.avatar_url ? '<img src="'+escapeHtml(item.avatar_url)+'" style="width:56px;height:56px;object-fit:cover;border-radius:8px;">' : escapeHtml((item.name||'')[0]||'?') }</div>
+        <div style="flex:1">
+          <div style="font-weight:700">${escapeHtml(item.name || item.contact)}</div>
+          <div style="color:#64748b;font-size:0.9rem;margin-top:6px">${escapeHtml(item.last_text||'')}</div>
         </div>
-        <div class="contact-info">
-          <div class="contact-name">${escapeHtml(item.name || item.contact)}</div>
-          <div class="contact-last">${escapeHtml(item.last_text || '')}</div>
-        </div>
-        <div style="text-align:right;color:#94a3b8;font-size:0.85rem">${item.last_ts ? new Date(item.last_ts*1000).toLocaleString() : ''}</div>
-      `;
-      div.addEventListener('click', ()=> {
-        const peer = encodeURIComponent(item.contact);
-        window.location.href = '/chat?peer=' + peer;
-      });
-      container.appendChild(div);
+        <div style="color:#94a3b8;font-size:0.85rem">${item.last_ts?new Date(item.last_ts*1000).toLocaleString():''}</div>`;
+      card.addEventListener('click', ()=> window.location.href = '/chat?peer=' + encodeURIComponent(item.contact));
+      container.appendChild(card);
     });
   }
 
-  document.getElementById('nav-calls').addEventListener('click', ()=> { window.location.href = '/calls' });
-  document.getElementById('nav-profile').addEventListener('click', ()=> { window.location.href = '/profile' });
-  document.getElementById('nav-chats').addEventListener('click', ()=> { window.location.href = '/inbox' });
-  document.getElementById('nav-settings').addEventListener('click', ()=> { window.location.href = '/settings' });
+  document.getElementById('nav-calls').addEventListener('click', ()=> window.location.href='/calls');
+  document.getElementById('nav-profile').addEventListener('click', ()=> window.location.href='/profile');
+  document.getElementById('nav-chats').addEventListener('click', ()=> window.location.href='/inbox');
+  document.getElementById('nav-settings').addEventListener('click', ()=> window.location.href='/settings');
 
-  await loadContacts();
+  loadContacts();
 })();
 </script>
 </body>
@@ -1442,95 +1380,73 @@ def contacts_list_api():
             {'contact':'bob','name':'Bob','last_text':'See you','last_ts': int(time.time())-3600, 'avatar_url': '/avatar/bob'}
         ]})
 # ---------- END contacts/inbox addition ----------
-INDEX_HTML = r'''<!doctype html>
-<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>InfinityChatter ♾️ — Login</title>
-<script src="https://cdn.tailwindcss.com"></script>
-<style>
-  body{font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial;}
-  .heading{display:flex;justify-content:center;gap:8px;align-items:center}
-  .left{color:#3730a3;font-weight:800;font-size:1.5rem}
-  .right{color:#be185d;font-weight:800;font-size:1.5rem}
-  header{ text-align:center; margin:18px 0; }
-</style>
-</head><body class="min-h-screen bg-gradient-to-br from-indigo-50 via-white to-pink-50 p-4">
-  <div class="max-w-3xl mx-auto">
-    <header>
-      <img src="{{ heading_img }}" alt="heading" class="mx-auto" style="max-height:96px"/>
-      <div class="heading mt-2"><div class="left">Asphalt</div><div class="right">Legends</div></div>
-      <p class="text-xs text-gray-500 mt-2">Shared single passkey login. First user creates master passkey.</p>
-    </header>
-
-    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-      {% if first_user_none %}
-      <section class="p-4 bg-white rounded-lg shadow">
-        <h3 class="text-indigo-700 font-semibold mb-2">Register (create master passkey)</h3>
-        <form id="regForm">
-          <input id="reg_name" class="w-full p-2 border rounded mb-2" placeholder="Display name" />
-          <input id="reg_passkey" type="password" class="w-full p-2 border rounded mb-2" placeholder="Choose master passkey" />
-          <div class="flex gap-2">
-            <button type="submit" class="px-3 py-2 rounded bg-green-600 text-white flex-1">Register</button>
-            <button id="genBtn" type="button" class="px-3 py-2 rounded bg-gray-100">Generate</button>
-          </div>
-          <div id="regStatus" class="text-sm mt-2 text-red-500"></div>
-        </form>
-      </section>
-      {% endif %}
-
-      <section class="p-4 bg-white rounded-lg shadow">
-        <h3 class="text-indigo-700 font-semibold mb-2">Login</h3>
-        <form id="loginForm">
-          <input id="login_name" class="w-full p-2 border rounded mb-2" placeholder="Display name" />
-          <input id="login_passkey" type="password" class="w-full p-2 border rounded mb-2" placeholder="Master passkey" />
-          <button type="submit" class="w-full px-3 py-2 rounded bg-indigo-600 text-white">Login</button>
-          <div id="loginStatus" class="text-sm mt-2 text-red-500"></div>
-        </form>
-      </section>
+LOGIN_HTML = r'''<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>InfinityChatter — Login</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body { background:linear-gradient(135deg,#eff6ff,#f5f3ff); display:flex; align-items:center; justify-content:center; height:100vh; font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,"Helvetica Neue",Arial; }
+    .card { width:100%; max-width:420px; background:#fff; border-radius:18px; padding:28px; box-shadow:0 10px 30px rgba(2,6,23,0.08); text-align:center; }
+    .avatar-container{ margin-bottom:18px; display:flex; justify-content:center; }
+    .avatar-circle{ width:96px; height:96px; border-radius:50%; background:#f1f5f9; display:flex; align-items:center; justify-content:center; border:3px solid #e2e8f0; cursor:pointer; overflow:hidden; }
+    .avatar-circle img{ width:100%; height:100%; object-fit:cover; }
+    input[type=text], input[type=tel] { width:100%; padding:10px 12px; border-radius:10px; border:1px solid #e6eef6; margin-top:10px; font-size:1rem; }
+    button { margin-top:14px; width:100%; padding:10px; border-radius:10px; border:none; background:#2563eb; color:#fff; font-weight:700; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h2 style="font-weight:800;font-size:20px;margin-bottom:12px;">InfinityChatter</h2>
+    <div class="avatar-container">
+      <label for="avatarInput" class="avatar-circle" id="avatarCircle"><span style="font-size:28px;">📷</span></label>
+      <input id="avatarInput" type="file" accept="image/*" style="display:none" />
     </div>
+    <input id="nameInput" type="text" placeholder="Your name" />
+    <input id="mobileInput" type="tel" placeholder="Mobile number" />
+    <button id="saveBtn">Continue</button>
   </div>
+
 <script>
-function show(id,msg,err){const e=document.getElementById(id); if(!e)return; e.textContent=msg; e.style.color = err? '#b91c1c':'#16a34a';}
-document.getElementById('genBtn')?.addEventListener('click', ()=>{ const s = Array.from(crypto.getRandomValues(new Uint8Array(12))).map(b => (b%36).toString(36)).join(''); document.getElementById('reg_passkey').value = s; show('regStatus','Generated — copy it.'); });
+  // If profile exists already, go to inbox
+  const existingProfile = localStorage.getItem('infinity_profile');
+  if(existingProfile){
+    // small delay to show smooth redirect for UX
+    setTimeout(()=> window.location.href = '/inbox', 200);
+  }
 
-async function postJson(url, body){
-  const r = await fetch(url, {
-    method: 'POST',
-    headers: {'Content-Type':'application/json'},
-    body: JSON.stringify(body),
-    credentials: 'include'
+  const avatarInput = document.getElementById('avatarInput');
+  const avatarCircle = document.getElementById('avatarCircle');
+  let avatarData = null;
+
+  avatarCircle.addEventListener('click', ()=> avatarInput.click());
+  avatarInput.addEventListener('change', (e)=>{
+    const file = e.target.files && e.target.files[0];
+    if(!file) return;
+    const reader = new FileReader();
+    reader.onload = ()=> {
+      avatarData = reader.result;
+      avatarCircle.innerHTML = '<img src="'+avatarData+'" alt="avatar">';
+    };
+    reader.readAsDataURL(file);
   });
-  const text = await r.text();
-  try { return {ok:r.ok, json: JSON.parse(text), text}; } catch(e){ return {ok:r.ok, text}; }
-}
 
-document.getElementById('regForm')?.addEventListener('submit', async (e)=>{
-  e.preventDefault();
-  show('regStatus','Registering...');
-  const name = document.getElementById('reg_name').value.trim();
-  const passkey = document.getElementById('reg_passkey').value;
-  try{
-    const res = await postJson('/register', {name, passkey});
-    if(!res.ok) throw new Error(res.text || 'register failed');
-    show('regStatus','Registered — redirecting...');
-    setTimeout(()=> location.href='/chat', 500);
-  }catch(err){ show('regStatus','Register failed: '+(err.message||err), true); }
-});
-
-document.getElementById('loginForm')?.addEventListener('submit', async (e)=>{
-  e.preventDefault();
-  show('loginStatus','Logging in...');
-  const name = document.getElementById('login_name').value.trim();
-  const passkey = document.getElementById('login_passkey').value;
-  try{
-    const res = await postJson('/login', {name, passkey});
-    if(!res.ok) throw new Error(res.text || 'login failed');
-    show('loginStatus','Logged in — redirecting...');
-    setTimeout(()=> location.href='/chat', 300);
-  }catch(err){ show('loginStatus','Login failed: '+(err.message||err), true); }
-});
+  document.getElementById('saveBtn').addEventListener('click', ()=>{
+    const name = document.getElementById('nameInput').value.trim();
+    const mobile = document.getElementById('mobileInput').value.trim();
+    if(!name){ alert('Please enter your name'); return; }
+    if(!mobile){ alert('Please enter your mobile number'); return; }
+    const profile = { name, mobile, avatar: avatarData };
+    localStorage.setItem('infinity_profile', JSON.stringify(profile));
+    window.location.href = '/inbox';
+  });
 </script>
-</body></html>
+</body>
+</html>
 '''
+
 # --- AVATAR page (full-featured generator using DiceBear HTTP API) ---
 AVATAR_HTML = r'''<!doctype html>
 <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1" />
@@ -2535,6 +2451,25 @@ CHAT_HTML = r'''<!doctype html>
 <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
 <script src="/static/push-client.js"></script>
 <script>
+
+window.socket = io({
+  transports: ['websocket', 'polling'],  // allow WebSocket upgrade
+  path: '/socket.io',
+  upgrade: true,                         // enable upgrade to WebSocket
+  reconnection: true,
+  reconnectionAttempts: 5,
+  reconnectionDelay: 2000
+});
+
+if (typeof cs !== 'undefined') cs.socket = window.socket;
+
+socket.on('connect', () => {
+  console.log('✅ socket connected', socket.id);
+  const profile = JSON.parse(localStorage.getItem('infinity_profile') || '{}');
+  if (profile.name) socket.emit('register_socket', { username: profile.name });
+});
+socket.on('disconnect', () => console.log('⚠️ socket disconnected'));
+socket.on('connect_error', (err) => console.error('❌ socket connect_error', err));
 
 (function () {
   'use strict';
@@ -6434,7 +6369,7 @@ def util():
 @app.route("/")
 def index():
     first = load_first_user() is None
-    return render_template_string(INDEX_HTML, first_user_none=first, heading_img=HEADING_IMG)
+    return render_template_string(LOGIN_HTML, first_user_none=first, heading_img=HEADING_IMG)
 
 @app.route("/profile_get")
 def profile_get():
@@ -6625,6 +6560,50 @@ def send_composite_message():
         current_app.logger.exception("send_composite_message error")
         return jsonify({"error": str(e)}), 500
 
+@app.route('/contacts_list')
+def contacts_list_api():
+    username = flask_session.get('username') or request.args.get('username')
+    if not username:
+        # demo fallback
+        return jsonify({'contacts': [
+            {'contact':'alice','name':'Alice','last_text':'Hey!','last_ts': int(time.time())-60, 'avatar_url': '/avatar/alice'},
+            {'contact':'bob','name':'Bob','last_text':'See you','last_ts': int(time.time())-3600, 'avatar_url': '/avatar/bob'}
+        ]})
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT contact, last_text, last_ts FROM (
+              SELECT
+                CASE WHEN sender = ? THEN recipient ELSE sender END AS contact,
+                MAX(timestamp) AS last_ts
+              FROM messages
+              WHERE sender = ? OR recipient = ?
+              GROUP BY contact
+            ) AS t
+            JOIN messages m ON ( (m.sender = ? AND m.recipient = t.contact) OR (m.recipient = ? AND m.sender = t.contact) )
+            ORDER BY t.last_ts DESC
+        """, (username, username, username, username, username))
+        rows = cur.fetchall()
+        contacts = []
+        seen = set()
+        for r in rows:
+            c = r[0]
+            if not c or c in seen: continue
+            contacts.append({
+                'contact': c,
+                'name': c,
+                'last_text': r[1] or '',
+                'last_ts': int(r[2]) if r[2] else None,
+                'avatar_url': f'/avatar/{c}'
+            })
+            seen.add(c)
+        conn.close()
+        return jsonify({'contacts': contacts})
+    except Exception:
+        current_app.logger.exception('contacts_list error')
+        return jsonify({'contacts': []})
+
 @app.route('/poll_messages')
 def poll_messages():
     since = request.args.get('since', 0, type=int)
@@ -6705,90 +6684,70 @@ def on_disconnect():
 
 @socketio.on('call_outgoing')
 def on_call_outgoing(data):
-    """Caller initiates a call (video intent). Create call_id and inform participants.
-       Caller will be instructed to open Meet and share the link manually."""
     to = data.get('to')
     caller = data.get('from') or 'unknown'
     isVideo = data.get('isVideo', False)
     if not to or not caller:
         return
 
-    # generate call id and save
     call_id = secrets.token_hex(12)
     save_call(call_id, caller, to, isVideo, status='ringing')
     CALL_INVITES[call_id] = {"caller": caller, "callee": to, "isVideo": isVideo}
 
     sid_callee = USER_SID.get(to)
-    sid_caller = USER_SID.get(caller)
+    # Always inform caller immediately using the caller's request.sid (guarantees sender receives)
+    try:
+        emit('open_meet_creator', {'call_id': call_id}, room=request.sid)
+    except Exception:
+        # fallback: if request.sid not available, try mapping
+        sid_caller = USER_SID.get(caller)
+        if sid_caller:
+            emit('open_meet_creator', {'call_id': call_id}, room=sid_caller)
 
-    # Inform callee that there's an incoming invite (UI banner)
+    # Inform callee if online (pre-inform, optional)
     if sid_callee:
         emit('incoming_meet_invite', {'from': caller, 'call_id': call_id}, room=sid_callee)
-    else:
-        app.logger.info("call_outgoing: callee %s offline; saved invite %s", to, call_id)
-
-    # Tell caller to open Google Meet (web/app) and show share UI
-    if sid_caller:
-        emit('open_meet_creator', {'call_id': call_id}, room=sid_caller)
 
 
 @socketio.on('share_meet_invite')
 def on_share_meet_invite(data):
-    """Caller shares a Meet URL for a call_id -> forward to callee as an incoming banner with URL."""
     call_id = data.get('call_id')
     url = data.get('url')
     if not call_id or not url:
         return
-
     info = CALL_INVITES.get(call_id)
     if not info:
+        # store the link with info so callee gets it later
         return
-
     sid_callee = USER_SID.get(info['callee'])
     if sid_callee:
-        emit('incoming_meet_invite', {
-            'from': info['caller'],
-            'call_id': call_id,
-            'url': url
-        }, room=sid_callee)
+        emit('incoming_meet_invite', {'from': info['caller'], 'call_id': call_id, 'url': url}, room=sid_callee)
     else:
-        app.logger.info("share_meet_invite: callee offline for call_id %s", call_id)
-
+        current_app.logger.info("share_meet_invite: callee offline for call_id %s", call_id)
 
 @socketio.on('meet_accept')
 def on_meet_accept(data):
-    """Callee accepted the Meet invite; open the shared Meet URL on both sides."""
     call_id = data.get('call_id')
     meet_url = data.get('url')
     if not call_id or not meet_url:
         return
-
     info = CALL_INVITES.pop(call_id, None)
     if not info:
         return
-
-    # mark started/accepted in DB/logs
     update_call_started(call_id)
-
     sid_caller = USER_SID.get(info.get('caller'))
     sid_callee = USER_SID.get(info.get('callee'))
-
-    # Emit the same URL to both participants so they join the same meeting
     if sid_caller:
         emit('open_meet', {'url': meet_url}, room=sid_caller)
     if sid_callee:
         emit('open_meet', {'url': meet_url}, room=sid_callee)
-
-    # Optional: legacy event for caller UI
     if sid_caller:
         emit('call_accepted', {'call_id': call_id, 'from': info.get('callee')}, room=sid_caller)
-
-    app.logger.info("meet_accept: call %s accepted, open_meet -> %s", call_id, meet_url)
+    current_app.logger.info("meet_accept: call %s accepted, open_meet -> %s", call_id, meet_url)
 
 
 @socketio.on('meet_decline')
 def on_meet_decline(data):
-    """Callee declines the meet invite; notify caller and cleanup."""
     call_id = data.get('call_id')
     info = CALL_INVITES.pop(call_id, None)
     if not info:
@@ -6797,8 +6756,7 @@ def on_meet_decline(data):
     if sid_caller:
         emit('meet_declined', {'call_id': call_id}, room=sid_caller)
     save_call(call_id, info['caller'], info['callee'], 0, status='declined')
-    app.logger.info("meet_decline: call %s declined by %s", call_id, info.get('callee'))
-
+    current_app.logger.info("meet_decline: call %s declined by %s", call_id, info.get('callee'))
 
 @socketio.on('call_end')
 def on_call_end(data):
