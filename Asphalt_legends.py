@@ -15,7 +15,7 @@ import requests
 from datetime import datetime
 from flask import (
     Flask, render_template_string, request, jsonify, session, current_app,
-    redirect, url_for, send_from_directory, abort, make_response
+    redirect, url_for, send_from_directory, abort, make_response, flask_session
 )
 from werkzeug.utils import secure_filename
 from flask_socketio import SocketIO, emit, join_room, leave_room
