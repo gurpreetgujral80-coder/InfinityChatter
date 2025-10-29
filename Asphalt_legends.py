@@ -6315,6 +6315,178 @@ window.addEventListener('message', (ev) => {
   }
 });
 
+// === InfinityChatter: exact header UI + iOS nav style + corrected nav routing ===
+(function() {
+  // ---- helpers ----
+  function loadFontsOnce() {
+    if (!document.querySelector('link[href*="Pacifico"]')) {
+      const fonts = document.createElement("link");
+      fonts.href = "https://fonts.googleapis.com/css2?family=Pacifico&family=Poppins:wght@400;600&display=swap";
+      fonts.rel = "stylesheet";
+      document.head.appendChild(fonts);
+    }
+  }
+
+  function safeInitIcons() {
+    try {
+      if (window.lucide && typeof window.lucide.createIcons === "function") {
+        window.lucide.createIcons();
+      } else if (window.lucide?.default?.createIcons) {
+        window.lucide.default.createIcons();
+      }
+    } catch (err) { console.error("Lucide init error:", err); }
+  }
+
+  function loadLucideOnce(callback) {
+    if (window.lucide || document.querySelector('script[src*="lucide"]')) {
+      if (typeof callback === 'function') callback();
+      safeInitIcons();
+      return;
+    }
+    const s = document.createElement('script');
+    s.src = "https://unpkg.com/lucide@0.395.0/dist/umd/lucide.min.js";
+    s.async = true;
+    s.onload = () => { safeInitIcons(); if (typeof callback === 'function') callback(); };
+    document.head.appendChild(s);
+  }
+
+  // ---- UI ----
+  loadFontsOnce();
+  loadLucideOnce();
+
+  document.querySelectorAll("header").forEach(el => el.remove());
+  const header = document.createElement("header");
+  header.style.cssText = `
+    width:100%;
+    background:#fff;
+    padding:14px 20px 10px;
+    position:fixed;
+    top:0;
+    left:0;
+    z-index:1000;
+    box-shadow:0 1px 10px rgba(0,0,0,0.05);
+    display:flex;
+    flex-direction:column;
+    align-items:flex-start;
+  `;
+  header.innerHTML = `
+    <div style="font-family:'Pacifico',cursive;font-size:32px;font-weight:500;color:#0f172a;line-height:1;">InfinityChatter</div>
+    <div id="subLabel" style="font-family:'Poppins',sans-serif;font-size:15px;color:#475569;margin-top:3px;">Chats</div>
+  `;
+  document.body.prepend(header);
+
+  const nav = document.querySelector('.bottom-nav');
+  const tabs = [
+    { id: "chats", icon: "message-circle", label: "Chats" },
+    { id: "calls", icon: "phone", label: "Calls" },
+    { id: "profile", icon: "user", label: "Profile" },
+    { id: "settings", icon: "settings", label: "Settings" }
+  ];
+
+  if (!nav) {
+    console.warn("⚠️ .bottom-nav not found");
+  } else {
+    nav.classList.add("ios-bottom-nav");
+    nav.style.cssText = `
+      position:fixed;
+      bottom:20px;
+      left:50%;
+      transform:translateX(-50%);
+      width:92%;
+      max-width:480px;
+      background:rgba(255,255,255,0.55);
+      backdrop-filter:blur(30px) saturate(180%);
+      border:1px solid rgba(255,255,255,0.4);
+      border-radius:40px;
+      box-shadow:0 10px 25px rgba(0,0,0,0.12);
+      display:flex;
+      justify-content:space-around;
+      align-items:center;
+      padding:10px 0;
+      font-family:'Poppins',sans-serif;
+      z-index:1000;
+      transition:all .3s ease;
+    `;
+
+    const existing = Array.from(nav.children);
+    function makeIconLabel(tab) {
+      const frag = document.createDocumentFragment();
+      const i = document.createElement('i');
+      i.setAttribute('data-lucide', tab.icon);
+      i.style.width = '24px';
+      i.style.height = '24px';
+      i.style.stroke = '#0f172a';
+      frag.appendChild(i);
+      const lbl = document.createElement('div');
+      lbl.style.fontSize = '12px';
+      lbl.style.marginTop = '-2px';
+      lbl.style.color = '#0f172a';
+      lbl.textContent = tab.label;
+      frag.appendChild(lbl);
+      return frag;
+    }
+
+    for (let i = 0; i < tabs.length; i++) {
+      const tab = tabs[i];
+      let item = existing[i];
+      if (item) {
+        while (item.firstChild) item.removeChild(item.firstChild);
+        item.appendChild(makeIconLabel(tab));
+        item.classList.add('nav-item');
+        item.dataset.id = tab.id;
+        item.style.cssText = "text-align:center;cursor:pointer;transition:transform .2s;flex:1;";
+      } else {
+        item = document.createElement('div');
+        item.className = 'nav-item';
+        item.dataset.id = tab.id;
+        item.style.cssText = "text-align:center;cursor:pointer;transition:transform .2s;flex:1;";
+        item.appendChild(makeIconLabel(tab));
+        nav.appendChild(item);
+      }
+    }
+
+    safeInitIcons();
+
+    // --- fixed and simplified correct navigation map ---
+    const routeMap = {
+      chats: "/inbox",          // main chat inbox page
+      calls: "/calls",    // call page
+      profile: "/profile",     // profile page
+      settings: "/settings"    // settings page
+    };
+
+    Array.from(nav.querySelectorAll('.nav-item')).forEach(item => {
+      if (item.getAttribute('data-bound')) return;
+      item.setAttribute('data-bound', '1');
+      item.addEventListener('click', () => {
+        // click animation
+        item.style.transform = 'scale(1.12)';
+        setTimeout(() => item.style.transform = 'scale(1)', 160);
+
+        const id = item.dataset.id;
+        const sub = document.getElementById('subLabel');
+        if (sub) sub.textContent = id.charAt(0).toUpperCase() + id.slice(1);
+
+        // correct routing
+        const target = routeMap[id];
+        if (target && window.location.pathname !== target) {
+          window.location.href = target;
+        }
+      });
+    });
+  }
+
+  // Elegant non-repeating gradient background
+  document.documentElement.style.background = 'linear-gradient(180deg, #f8fafc 0%, #eef2ff 100%)';
+  document.documentElement.style.backgroundRepeat = 'no-repeat';
+  document.documentElement.style.backgroundAttachment = 'fixed';
+
+  const currTop = parseInt(window.getComputedStyle(document.body).paddingTop || '0', 10);
+  if (currTop < 90) document.body.style.paddingTop = '90px';
+  const currBottom = parseInt(window.getComputedStyle(document.body).paddingBottom || '0', 10);
+  if (currBottom < 130) document.body.style.paddingBottom = '130px';
+})();
+
 </script>
 </body>
 </html>
