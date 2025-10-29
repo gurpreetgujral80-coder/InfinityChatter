@@ -21,7 +21,7 @@ from werkzeug.utils import secure_filename
 from flask_socketio import SocketIO, emit, join_room, leave_room
 from pywebpush import webpush, WebPushException
 from dotenv import load_dotenv
-from flask_session import Session
+from flask_session import flask_session
 
 load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 
