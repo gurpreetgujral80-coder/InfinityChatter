@@ -179,7 +179,6 @@ def init_db():
 def db_conn():
     return sqlite3.connect(DB_PATH)
 
-
 # initialize database at startup
 init_db()
 
