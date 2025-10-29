@@ -88,6 +88,8 @@ socketio = SocketIO(app, cors_allowed_origins="*", async_mode="eventlet")
 def init_db():
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
+
+    # ---- Core tables ----
     c.execute("""
         CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -124,19 +126,61 @@ def init_db():
     """)
     c.execute("""
         CREATE TABLE IF NOT EXISTS push_subscriptions (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          username TEXT,                -- nullable if not logged-in
-          subscription TEXT NOT NULL,   -- JSON string of the PushSubscription object
-          created_at INTEGER NOT NULL,
-          last_seen INTEGER
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT,
+            subscription TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            last_seen INTEGER
         );
     """)
+
+    conn.commit()
+
+    # ---- Safe schema upgrades ----
+    # add phone column to users if missing
+    try:
+        cur = conn.cursor()
+        cur.execute("PRAGMA table_info(users)")
+        cols = [r[1] for r in cur.fetchall()]
+        if "phone" not in cols:
+            cur.execute("ALTER TABLE users ADD COLUMN phone TEXT DEFAULT NULL")
+            conn.commit()
+    except Exception as e:
+        print("[init_db] Warning: could not add phone column:", e)
+
+    # ---- Contacts table ----
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS contacts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            owner TEXT NOT NULL,        -- username who owns this contact list
+            contact_name TEXT,
+            phone TEXT,
+            avatar TEXT DEFAULT NULL,
+            added_at INTEGER,
+            source TEXT DEFAULT 'manual'
+        );
+    """)
+
+    # ---- Contact invites table ----
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS contact_invites (
+            token TEXT PRIMARY KEY,
+            inviter TEXT NOT NULL,
+            phone TEXT,
+            created_at INTEGER,
+            expires_at INTEGER
+        );
+    """)
+
     conn.commit()
     conn.close()
+
 
 def db_conn():
     return sqlite3.connect(DB_PATH)
 
+
+# initialize database at startup
 init_db()
 
 @app.route("/api/vapid_public")
@@ -294,6 +338,48 @@ def get_partner():
     if r: return {"id": r[0], "name": r[1]}
     return None
 
+# ---------- Contacts helpers ----------
+def add_contact(owner, contact_name, phone, avatar=None, source='manual'):
+    now = int(time.time())
+    conn = db_conn(); c = conn.cursor()
+    c.execute("INSERT INTO contacts (owner, contact_name, phone, avatar, added_at, source) VALUES (?, ?, ?, ?, ?, ?)",
+              (owner, contact_name, phone, avatar, now, source))
+    conn.commit(); conn.close()
+    return True
+
+def list_contacts_for(owner):
+    conn = db_conn(); c = conn.cursor()
+    c.execute("SELECT id, contact_name, phone, avatar, added_at, source FROM contacts WHERE owner = ? ORDER BY added_at DESC", (owner,))
+    rows = c.fetchall(); conn.close()
+    return [{"id": r[0], "name": r[1], "phone": r[2], "avatar": r[3], "added_at": r[4], "source": r[5]} for r in rows]
+
+def find_users_by_phones(phones):
+    # normalize phones and find registered users (phone column on users table)
+    if not phones: return {}
+    conn = db_conn(); c = conn.cursor()
+    q = "SELECT name, phone FROM users WHERE phone IN ({})".format(",".join("?"*len(phones)))
+    c.execute(q, phones)
+    rows = c.fetchall(); conn.close()
+    return {r[1]: r[0] for r in rows}  # map phone -> username
+
+# ---------- Invite helpers ----------
+def create_contact_invite(inviter, phone=None, expires_secs=7*24*3600):
+    token = secrets.token_urlsafe(20)
+    now = int(time.time())
+    exp = now + expires_secs if expires_secs else None
+    conn = db_conn(); c = conn.cursor()
+    c.execute("INSERT INTO contact_invites (token, inviter, phone, created_at, expires_at) VALUES (?, ?, ?, ?, ?)",
+              (token, inviter, phone, now, exp))
+    conn.commit(); conn.close()
+    return token
+
+def load_contact_invite(token):
+    conn = db_conn(); c = conn.cursor()
+    c.execute("SELECT token, inviter, phone, created_at, expires_at FROM contact_invites WHERE token = ?", (token,))
+    r = c.fetchone(); conn.close()
+    if not r: return None
+    return {"token": r[0], "inviter": r[1], "phone": r[2], "created_at": r[3], "expires_at": r[4]}
+
 def save_message(sender, text, attachments=None):
     """
     Save a message to the SQLite messages table and return the inserted message dict.
@@ -366,6 +452,116 @@ def send_web_push(subscription_info, payload_dict):
     except Exception as e:
         app.logger.exception("Unexpected error sending web push: %s", e)
         return False
+
+# --- API: get contacts for logged in user ---
+@app.route('/api/contacts', methods=['GET'])
+def api_contacts():
+    username = session.get('username')
+    if not username:
+        return jsonify({"error": "not_logged_in"}), 401
+    contacts = list_contacts_for(username)
+    return jsonify({"contacts": contacts})
+
+# --- API: add one or multiple contacts from client ---
+@app.route('/api/contacts_add', methods=['POST'])
+def api_contacts_add():
+    username = session.get('username')
+    if not username:
+        return jsonify({"error": "not_logged_in"}), 401
+    body = request.get_json() or {}
+    entries = body.get('contacts') or []  # list of {name, phone}
+    if not entries:
+        return jsonify({"error": "no contacts provided"}), 400
+
+    phones = []
+    for e in entries:
+        phone = (e.get('phone') or '').strip()
+        if not phone: continue
+        add_contact(username, e.get('name') or '', phone, avatar=e.get('avatar'), source=e.get('source','manual'))
+        phones.append(phone)
+
+    # check which of these phones already correspond to registered users
+    found = find_users_by_phones(list(set(phones)))
+    # notify user (real-time)
+    socketio.emit('contacts_updated', {'owner': username}, room=USER_SID.get(username)) if USER_SID.get(username) else None
+
+    # prepare response mapping phone -> username if exists
+    present = []
+    missing = []
+    for p in phones:
+        if p in found:
+            present.append({"phone": p, "username": found[p]})
+        else:
+            missing.append({"phone": p})
+
+    return jsonify({"ok": True, "present": present, "missing": missing})
+
+# --- API: create a share invite link for a phone (or general invite) ---
+@app.route('/api/create_contact_invite', methods=['POST'])
+def api_create_contact_invite():
+    username = session.get('username')
+    if not username:
+        return jsonify({"error": "not_logged_in"}), 401
+    body = request.get_json() or {}
+    phone = body.get('phone')  # optional
+    token = create_contact_invite(username, phone=phone)
+    # make invite URL (absolute)
+    base = request.url_root.rstrip('/')
+    invite_url = f"{base}/invite/{token}"
+    return jsonify({"ok": True, "url": invite_url, "token": token})
+
+# --- Public invite landing page (show simple registration prefilling phone) ---
+@app.route('/invite/<token>', methods=['GET', 'POST'])
+def invite_landing(token):
+    invite = load_contact_invite(token)
+    if not invite:
+        return "Invalid or expired invite", 404
+    if request.method == 'GET':
+        # show a small simple HTML form (or render_template) — we return a small template string for now
+        prephone = invite.get('phone') or ''
+        # this HTML should be replaced with your real registration template; kept minimal
+        return render_template_string("""
+          <!doctype html><html><head><meta charset="utf-8"><title>Join InfinityChatter</title></head>
+          <body>
+            <h2>{{inviter}} invited you to InfinityChatter</h2>
+            <form method="post">
+              <label>Name: <input name="name" required></label><br>
+              <label>Phone: <input name="phone" value="{{phone}}" required></label><br>
+              <button type="submit">Join & Add Contact</button>
+            </form>
+          </body></html>
+        """, inviter=invite['inviter'], phone=prephone)
+    else:
+        # POST: create user (light-weight signup), then add mutual contacts
+        name = request.form.get('name')
+        phone = request.form.get('phone')
+        if not name or not phone:
+            return "Missing fields", 400
+        # Create minimal user row if name not exists
+        if not load_user_by_name(name):
+            # create placeholder password (random) — the application uses device-only login usually
+            salt = secrets.token_bytes(16)
+            phash = hashlib.sha256(salt + b'').digest()
+            # store phone in the users table (add phone column earlier)
+            conn = db_conn(); c = conn.cursor()
+            c.execute("INSERT OR IGNORE INTO users (name, pass_salt, pass_hash, phone) VALUES (?, ?, ?, ?)",
+                      (name, sqlite3.Binary(salt), sqlite3.Binary(phash), phone))
+            conn.commit(); conn.close()
+
+        # Add contact both ways: inviter gets this new user, new user gets inviter
+        inviter = invite['inviter']
+        add_contact(inviter, name, phone, source='shared')
+        add_contact(name, inviter + ' (from invite)', None, source='shared')  # you can choose how to represent
+        # Optionally remove invite
+        conn = db_conn(); c = conn.cursor(); c.execute("DELETE FROM contact_invites WHERE token=?", (token,)); conn.commit(); conn.close()
+
+        # Notify inviter realtime if online
+        sid = USER_SID.get(inviter)
+        if sid:
+            emit('contact_added_by_invite', {'inviter': inviter, 'new_name': name, 'new_phone': phone}, room=sid)
+
+        # After signup, redirect to main site or show success
+        return redirect(url_for('index'))  # or to login
 
 @app.route("/api/send_test_push", methods=["POST"])
 def api_send_test_push():
@@ -532,6 +728,13 @@ def handle_disconnect():
         if s == sid:
             USER_SID.pop(u, None)
             break
+
+@socketio.on('request_contacts_sync')
+def on_request_contacts_sync(data):
+    username = data.get('username') or session.get('username')
+    if not username: return
+    contacts = list_contacts_for(username)
+    emit('contacts_list', {'contacts': contacts})
 
 # Caller invites callee
 @socketio.on('call:invite')
@@ -1241,12 +1444,12 @@ def proxy_dicebear():
         current_app.logger.exception("proxy_dicebear error")
         return f"error: {e}", 500
 
-CONTACTS_HTML = r'''<!doctype html>
+Main_Page = r'''<!doctype html>
 <html>
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>InfinityChatter — Inbox</title>
+  <title>InfinityChatter</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <style>
     header.inbox-header { position:fixed; top:0; left:0; right:0; height:64px; display:flex; align-items:center; justify-content:center; background: rgba(255,255,255,0.9); backdrop-filter: blur(6px); z-index:50; box-shadow:0 1px 6px rgba(0,0,0,0.04); }
@@ -1279,6 +1482,290 @@ CONTACTS_HTML = r'''<!doctype html>
   </div>
 
 <script>
+(async function(){
+  // Requires cs.socket or window.socket for socket.io if you use it
+  const socket = window.socket || (window.cs && cs.socket);
+
+  // create Add Contacts box (rounded rectangle)
+  function createAddContactsButton() {
+    const box = document.createElement('div');
+    box.id = 'addContactsBox';
+    box.style.cssText = `
+      width:calc(100% - 40px);
+      max-width:480px;
+      margin:18px auto;
+      padding:14px 16px;
+      border-radius:12px;
+      box-shadow:0 4px 20px rgba(15,27,43,0.06);
+      background:linear-gradient(180deg, #fff, #fbfdff);
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap:12px;
+      font-family:Poppins, sans-serif;
+    `;
+    box.innerHTML = `
+      <div style="display:flex;align-items:center;gap:12px">
+        <div style="width:44px;height:44px;border-radius:10px;background:#eef;padding:6px;display:flex;align-items:center;justify-content:center;font-weight:700">+</div>
+        <div>
+          <div style="font-weight:600">Add Contacts</div>
+          <div style="font-size:12px;color:#6b7280">Import from device or share a link</div>
+        </div>
+      </div>
+      <div><button id="openAddContactsBtn" style="padding:8px 12px;border-radius:8px;border:none;background:#0f172a;color:white;cursor:pointer">Open</button></div>
+    `;
+    return box;
+  }
+
+  // insert box at top of main content (adjust selector to your page)
+  const container = document.querySelector('#main') || document.body;
+  const existing = document.getElementById('addContactsBox');
+  if (!existing) {
+    const btn = createAddContactsButton();
+    container.prepend(btn);
+    document.getElementById('openAddContactsBtn').addEventListener('click', openAddContactsModal);
+  }
+
+  // modal UI builder (simple)
+  function openAddContactsModal(){
+    // overlay
+    const overlay = document.createElement('div');
+    overlay.id = 'addContactsOverlay';
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.35);display:flex;align-items:center;justify-content:center;z-index:2000;';
+    const dialog = document.createElement('div');
+    dialog.style.cssText = 'width:92%;max-width:720px;background:white;padding:18px;border-radius:12px;box-shadow:0 10px 40px rgba(2,6,23,0.2);font-family:Poppins, sans-serif;';
+    dialog.innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+        <strong style="font-size:18px">Add Contacts</strong>
+        <button id="closeAddContacts" style="background:none;border:none;font-size:18px">✖</button>
+      </div>
+      <div style="display:flex;gap:12px;margin-bottom:10px">
+        <button id="useContactPicker" style="flex:1;padding:10px;border-radius:8px">Pick from device</button>
+        <button id="pasteOrUpload" style="flex:1;padding:10px;border-radius:8px">Paste / Upload CSV</button>
+        <button id="shareLinkBtn" style="flex:1;padding:10px;border-radius:8px">Share invite link</button>
+      </div>
+      <div id="addContactsResult" style="max-height:320px;overflow:auto"></div>
+    `;
+    overlay.appendChild(dialog);
+    document.body.appendChild(overlay);
+
+    document.getElementById('closeAddContacts').addEventListener('click', ()=> overlay.remove());
+    document.getElementById('useContactPicker').addEventListener('click', pickContactsFromDevice);
+    document.getElementById('pasteOrUpload').addEventListener('click', openManualImport);
+    document.getElementById('shareLinkBtn').addEventListener('click', openShareLinkUI);
+  }
+
+  // Contacts Picker (modern browsers, HTTPS, Chrome Android)
+  async function pickContactsFromDevice(){
+    const resultDiv = document.getElementById('addContactsResult');
+    resultDiv.innerHTML = '<div>Requesting contact permission...</div>';
+    try {
+      if ('contacts' in navigator && typeof navigator.contacts.select === 'function') {
+        const props = ['name','tel'];
+        const opts = {multiple:true};
+        const contacts = await navigator.contacts.select(props, opts);
+        // contacts -> array of objects with {name:[], tel:[]}
+        const normalized = [];
+        for (const c of contacts) {
+          const name = Array.isArray(c.name) ? c.name[0] : (c.name || '');
+          const tels = Array.isArray(c.tel) ? c.tel : (c.tel ? [c.tel] : []);
+          for (const t of tels) normalized.push({name: name || '', phone: normalizePhone(t)});
+        }
+        if (!normalized.length) { resultDiv.innerHTML = '<div>No phone numbers selected.</div>'; return; }
+        showSelectedAndSend(normalized);
+      } else {
+        resultDiv.innerHTML = '<div>Your browser does not support the Contacts Picker API. Use Paste / Upload option.</div>';
+      }
+    } catch (err) {
+      console.error(err);
+      resultDiv.innerHTML = '<div>Permission denied or error accessing contacts.</div>';
+    }
+  }
+
+  function normalizePhone(s){
+    if(!s) return '';
+    // very simple normalization: keep digits and leading +
+    return (s + '').replace(/[^0-9+]/g, '');
+  }
+
+  // manual import UI
+  function openManualImport(){
+    const resultDiv = document.getElementById('addContactsResult');
+    resultDiv.innerHTML = `
+      <div style="margin-bottom:8px">
+        <textarea id="contactsPaste" placeholder="Paste lines like: John Doe, +911234567890" style="width:100%;height:120px"></textarea>
+      </div>
+      <div style="display:flex;gap:8px">
+        <button id="processPaste" style="padding:8px 12px;border-radius:8px">Process</button>
+        <input id="csvUpload" type="file" accept=".csv,.vcf" />
+      </div>
+      <div id="manualPreview" style="margin-top:8px"></div>
+    `;
+    document.getElementById('processPaste').addEventListener('click', ()=>{
+      const txt = document.getElementById('contactsPaste').value.trim();
+      const items = txt.split('\n').map(l => l.trim()).filter(Boolean).map(line=>{
+        const parts = line.split(',');
+        const name = parts[0].trim();
+        const phone = normalizePhone(parts.slice(1).join('') || parts[0]);
+        return {name, phone};
+      });
+      showSelectedAndSend(items);
+    });
+    document.getElementById('csvUpload').addEventListener('change', async (ev)=>{
+      const f = ev.target.files[0];
+      if (!f) return;
+      const text = await f.text();
+      // naive CSV parse: take lines with comma
+      const items = text.split('\n').map(l => l.trim()).filter(Boolean).map(line=>{
+        const parts = line.split(',');
+        const name = parts[0].trim();
+        const phone = normalizePhone(parts[1] || parts.slice(-1)[0] || '');
+        return {name, phone};
+      });
+      showSelectedAndSend(items);
+    });
+  }
+
+  // show selected contacts UI and send to server
+  function showSelectedAndSend(list){
+    const resultDiv = document.getElementById('addContactsResult');
+    const uniq = [];
+    const seen = new Set();
+    for(const it of list){
+      if(!it.phone) continue;
+      if(seen.has(it.phone)) continue;
+      seen.add(it.phone);
+      uniq.push(it);
+    }
+    if(!uniq.length){ resultDiv.innerHTML = '<div>No valid phone numbers found.</div>'; return;}
+    resultDiv.innerHTML = '<div style="margin-bottom:8px">Selected contacts:</div>';
+    const ul = document.createElement('div');
+    ul.style.display = 'grid';
+    ul.style.gridTemplateColumns = '1fr 120px';
+    ul.style.gap = '8px';
+    for(const u of uniq){
+      const left = document.createElement('div');
+      left.textContent = (u.name || '(no name)') + ' — ' + u.phone;
+      const right = document.createElement('div');
+      const btn = document.createElement('button');
+      btn.textContent = 'Add';
+      btn.style.padding = '6px 10px';
+      btn.style.borderRadius = '8px';
+      btn.addEventListener('click', ()=> sendSelectedToServer([u]));
+      right.appendChild(btn);
+      ul.appendChild(left); ul.appendChild(right);
+    }
+    // bulk add button
+    const bulk = document.createElement('div');
+    bulk.style.gridColumn = '1/-1';
+    bulk.innerHTML = `<div style="margin-top:12px"><button id="bulkAddBtn" style="padding:8px 12px;border-radius:10px;background:#0f172a;color:#fff">Add All ${uniq.length}</button></div>`;
+    resultDiv.appendChild(ul); resultDiv.appendChild(bulk);
+    document.getElementById('bulkAddBtn').addEventListener('click', ()=> sendSelectedToServer(uniq));
+  }
+
+  // send to server /api/contacts_add
+  async function sendSelectedToServer(items){
+    const resultDiv = document.getElementById('addContactsResult');
+    resultDiv.innerHTML = '<div>Saving contacts…</div>';
+    try {
+      const resp = await fetch('/api/contacts_add', {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({contacts: items})
+      });
+      const j = await resp.json();
+      if (!resp.ok) {
+        resultDiv.innerHTML = `<div style="color:red">Error: ${j.error || resp.status}</div>`;
+        return;
+      }
+      // present: numbers that are on InfinityChatter
+      let html = '<div style="margin-bottom:8px"><strong>Result</strong></div>';
+      if (j.present && j.present.length){
+        html += '<div style="margin-bottom:8px">These contacts are on InfinityChatter:</div>';
+        j.present.forEach(p => html += `<div>${p.phone} — ${p.username}</div>`);
+      }
+      if (j.missing && j.missing.length){
+        html += '<div style="margin-top:10px;color:#b91c1c">These numbers are NOT on InfinityChatter:</div>';
+        j.missing.forEach(m => {
+          html += `<div style="display:flex;gap:8px;align-items:center;margin-top:6px">
+                     <div style="flex:1">${m.phone}</div>
+                     <button class="shareInviteBtn" data-phone="${m.phone}" style="padding:6px 10px;border-radius:8px">Share invite</button>
+                   </div>`;
+        });
+      }
+      resultDiv.innerHTML = html;
+      // wire share invite buttons
+      Array.from(document.getElementsByClassName('shareInviteBtn')).forEach(b=>{
+        b.addEventListener('click', async (ev)=>{
+          const phone = b.dataset.phone;
+          b.textContent = 'Creating…';
+          const r = await fetch('/api/create_contact_invite', {
+            method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({phone})
+          });
+          const jr = await r.json();
+          if (jr && jr.url) {
+            // copy link to clipboard and show
+            await navigator.clipboard.writeText(jr.url).catch(()=>{});
+            b.textContent = 'Copied link';
+            // optionally show share sheet
+            if (navigator.share) {
+              try { await navigator.share({title:'Join me on InfinityChatter', text:'Join me on InfinityChatter', url: jr.url}); } catch(e){}
+            } else {
+              alert('Invite link copied to clipboard:\\n' + jr.url);
+            }
+          } else {
+            b.textContent = 'Error';
+          }
+        });
+      });
+    } catch (err) {
+      console.error(err);
+      resultDiv.innerHTML = '<div style="color:red">Network or internal error.</div>';
+    }
+  }
+
+  // share link UI dialog
+  function openShareLinkUI(){
+    const resultDiv = document.getElementById('addContactsResult');
+    resultDiv.innerHTML = `
+      <div style="margin-bottom:8px">Create a share link anyone can open to join:</div>
+      <div style="display:flex;gap:8px">
+        <input id="sharePhone" placeholder="Optional phone (prefill)" style="flex:1;padding:8px;border-radius:8px" />
+        <button id="createShareLink" style="padding:8px 12px;border-radius:8px">Create</button>
+      </div>
+      <div id="shareResult" style="margin-top:10px"></div>
+    `;
+    document.getElementById('createShareLink').addEventListener('click', async ()=>{
+      const phone = document.getElementById('sharePhone').value.trim();
+      const r = await fetch('/api/create_contact_invite', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({phone: phone || null})});
+      const j = await r.json();
+      const el = document.getElementById('shareResult');
+      if (j && j.url) {
+        el.innerHTML = `<div>Link: <input style="width:70%" value="${j.url}" id="shareLinkInput" /><button id="copyInvite">Copy</button></div>`;
+        document.getElementById('copyInvite').addEventListener('click', ()=>{
+          navigator.clipboard.writeText(j.url);
+          alert('Copied');
+        });
+      } else el.innerHTML = '<div style="color:red">Error creating link</div>';
+    });
+  }
+
+  // optional: listen for realtime invites or contact notifications
+  if (socket) {
+    socket.on && socket.on('contact_added_by_invite', (d)=> {
+      // show small toast
+      console.log('Contact added via invite', d);
+      alert(`${d.new_name} (${d.new_phone}) joined via your invite.`);
+    });
+    socket.on && socket.on('contacts_updated', (d)=>{
+      if (d.owner === window.MYNAME || d.owner === (window.cs && cs.myName)) {
+        console.log('Contacts updated');
+        // optionally refresh contact list UI by calling /api/contacts
+      }
+    });
+  }
+})();
+
 (function(){
   // ensure user has local profile
   const profile = JSON.parse(localStorage.getItem('infinity_profile')||'{}');
@@ -1329,6 +1816,179 @@ CONTACTS_HTML = r'''<!doctype html>
 
   loadContacts();
 })();
+// === InfinityChatter: exact header UI + iOS nav style + corrected nav routing ===
+(function() {
+  // ---- helpers ----
+  function loadFontsOnce() {
+    if (!document.querySelector('link[href*="Pacifico"]')) {
+      const fonts = document.createElement("link");
+      fonts.href = "https://fonts.googleapis.com/css2?family=Pacifico&family=Poppins:wght@400;600&display=swap";
+      fonts.rel = "stylesheet";
+      document.head.appendChild(fonts);
+    }
+  }
+
+  function safeInitIcons() {
+    try {
+      if (window.lucide && typeof window.lucide.createIcons === "function") {
+        window.lucide.createIcons();
+      } else if (window.lucide?.default?.createIcons) {
+        window.lucide.default.createIcons();
+      }
+    } catch (err) { console.error("Lucide init error:", err); }
+  }
+
+  function loadLucideOnce(callback) {
+    if (window.lucide || document.querySelector('script[src*="lucide"]')) {
+      if (typeof callback === 'function') callback();
+      safeInitIcons();
+      return;
+    }
+    const s = document.createElement('script');
+    s.src = "https://unpkg.com/lucide@0.395.0/dist/umd/lucide.min.js";
+    s.async = true;
+    s.onload = () => { safeInitIcons(); if (typeof callback === 'function') callback(); };
+    document.head.appendChild(s);
+  }
+
+  // ---- UI ----
+  loadFontsOnce();
+  loadLucideOnce();
+
+  document.querySelectorAll("header").forEach(el => el.remove());
+  const header = document.createElement("header");
+  header.style.cssText = `
+    width:100%;
+    background:#fff;
+    padding:14px 20px 10px;
+    position:fixed;
+    top:0;
+    left:0;
+    z-index:1000;
+    box-shadow:0 1px 10px rgba(0,0,0,0.05);
+    display:flex;
+    flex-direction:column;
+    align-items:flex-start;
+  `;
+  header.innerHTML = `
+    <div style="font-family:'Pacifico',cursive;font-size:32px;font-weight:500;color:#0f172a;line-height:1;">InfinityChatter</div>
+    <div id="subLabel" style="font-family:'Poppins',sans-serif;font-size:15px;color:#475569;margin-top:3px;">Chats</div>
+  `;
+  document.body.prepend(header);
+
+  const nav = document.querySelector('.bottom-nav');
+  const tabs = [
+    { id: "chats", icon: "message-circle", label: "Chats" },
+    { id: "calls", icon: "phone", label: "Calls" },
+    { id: "profile", icon: "user", label: "Profile" },
+    { id: "settings", icon: "settings", label: "Settings" }
+  ];
+
+  if (!nav) {
+    console.warn("⚠️ .bottom-nav not found");
+  } else {
+    nav.classList.add("ios-bottom-nav");
+    nav.style.cssText = `
+      position:fixed;
+      bottom:20px;
+      left:50%;
+      transform:translateX(-50%);
+      width:92%;
+      max-width:480px;
+      background:rgba(255,255,255,0.55);
+      backdrop-filter:blur(30px) saturate(180%);
+      border:1px solid rgba(255,255,255,0.4);
+      border-radius:40px;
+      box-shadow:0 10px 25px rgba(0,0,0,0.12);
+      display:flex;
+      justify-content:space-around;
+      align-items:center;
+      padding:10px 0;
+      font-family:'Poppins',sans-serif;
+      z-index:1000;
+      transition:all .3s ease;
+    `;
+
+    const existing = Array.from(nav.children);
+    function makeIconLabel(tab) {
+      const frag = document.createDocumentFragment();
+      const i = document.createElement('i');
+      i.setAttribute('data-lucide', tab.icon);
+      i.style.width = '24px';
+      i.style.height = '24px';
+      i.style.stroke = '#0f172a';
+      frag.appendChild(i);
+      const lbl = document.createElement('div');
+      lbl.style.fontSize = '12px';
+      lbl.style.marginTop = '-2px';
+      lbl.style.color = '#0f172a';
+      lbl.textContent = tab.label;
+      frag.appendChild(lbl);
+      return frag;
+    }
+
+    for (let i = 0; i < tabs.length; i++) {
+      const tab = tabs[i];
+      let item = existing[i];
+      if (item) {
+        while (item.firstChild) item.removeChild(item.firstChild);
+        item.appendChild(makeIconLabel(tab));
+        item.classList.add('nav-item');
+        item.dataset.id = tab.id;
+        item.style.cssText = "text-align:center;cursor:pointer;transition:transform .2s;flex:1;";
+      } else {
+        item = document.createElement('div');
+        item.className = 'nav-item';
+        item.dataset.id = tab.id;
+        item.style.cssText = "text-align:center;cursor:pointer;transition:transform .2s;flex:1;";
+        item.appendChild(makeIconLabel(tab));
+        nav.appendChild(item);
+      }
+    }
+
+    safeInitIcons();
+
+    // --- fixed and simplified correct navigation map ---
+    const routeMap = {
+      chats: "/inbox",          // main chat inbox page
+      calls: "/calls",    // call page
+      profile: "/profile",     // profile page
+      settings: "/settings"    // settings page
+    };
+
+    Array.from(nav.querySelectorAll('.nav-item')).forEach(item => {
+      if (item.getAttribute('data-bound')) return;
+      item.setAttribute('data-bound', '1');
+      item.addEventListener('click', () => {
+        // click animation
+        item.style.transform = 'scale(1.12)';
+        setTimeout(() => item.style.transform = 'scale(1)', 160);
+
+        const id = item.dataset.id;
+        const sub = document.getElementById('subLabel');
+        if (sub) sub.textContent = id.charAt(0).toUpperCase() + id.slice(1);
+
+        // correct routing
+        const target = routeMap[id];
+        if (target && window.location.pathname !== target) {
+          window.location.href = target;
+        }
+      });
+    });
+  }
+
+  // Elegant non-repeating gradient background
+  document.documentElement.style.background = 'linear-gradient(180deg, #f8fafc 0%, #eef2ff 100%)';
+  document.documentElement.style.backgroundRepeat = 'no-repeat';
+  document.documentElement.style.backgroundAttachment = 'fixed';
+
+  const currTop = parseInt(window.getComputedStyle(document.body).paddingTop || '0', 10);
+  if (currTop < 90) document.body.style.paddingTop = '90px';
+  const currBottom = parseInt(window.getComputedStyle(document.body).paddingBottom || '0', 10);
+  if (currBottom < 130) document.body.style.paddingBottom = '130px';
+
+})();
+
 </script>
 </body>
 </html>
@@ -1336,7 +1996,7 @@ CONTACTS_HTML = r'''<!doctype html>
 
 @app.route('/inbox')
 def inbox_page():
-    return render_template_string(CONTACTS_HTML)
+    return render_template_string(Main_Page)
 
 # ---------- END contacts/inbox addition ----------
 LOGIN_HTML = r'''<!doctype html>
@@ -6314,178 +6974,6 @@ window.addEventListener('message', (ev) => {
     });
   }
 });
-
-// === InfinityChatter: exact header UI + iOS nav style + corrected nav routing ===
-(function() {
-  // ---- helpers ----
-  function loadFontsOnce() {
-    if (!document.querySelector('link[href*="Pacifico"]')) {
-      const fonts = document.createElement("link");
-      fonts.href = "https://fonts.googleapis.com/css2?family=Pacifico&family=Poppins:wght@400;600&display=swap";
-      fonts.rel = "stylesheet";
-      document.head.appendChild(fonts);
-    }
-  }
-
-  function safeInitIcons() {
-    try {
-      if (window.lucide && typeof window.lucide.createIcons === "function") {
-        window.lucide.createIcons();
-      } else if (window.lucide?.default?.createIcons) {
-        window.lucide.default.createIcons();
-      }
-    } catch (err) { console.error("Lucide init error:", err); }
-  }
-
-  function loadLucideOnce(callback) {
-    if (window.lucide || document.querySelector('script[src*="lucide"]')) {
-      if (typeof callback === 'function') callback();
-      safeInitIcons();
-      return;
-    }
-    const s = document.createElement('script');
-    s.src = "https://unpkg.com/lucide@0.395.0/dist/umd/lucide.min.js";
-    s.async = true;
-    s.onload = () => { safeInitIcons(); if (typeof callback === 'function') callback(); };
-    document.head.appendChild(s);
-  }
-
-  // ---- UI ----
-  loadFontsOnce();
-  loadLucideOnce();
-
-  document.querySelectorAll("header").forEach(el => el.remove());
-  const header = document.createElement("header");
-  header.style.cssText = `
-    width:100%;
-    background:#fff;
-    padding:14px 20px 10px;
-    position:fixed;
-    top:0;
-    left:0;
-    z-index:1000;
-    box-shadow:0 1px 10px rgba(0,0,0,0.05);
-    display:flex;
-    flex-direction:column;
-    align-items:flex-start;
-  `;
-  header.innerHTML = `
-    <div style="font-family:'Pacifico',cursive;font-size:32px;font-weight:500;color:#0f172a;line-height:1;">InfinityChatter</div>
-    <div id="subLabel" style="font-family:'Poppins',sans-serif;font-size:15px;color:#475569;margin-top:3px;">Chats</div>
-  `;
-  document.body.prepend(header);
-
-  const nav = document.querySelector('.bottom-nav');
-  const tabs = [
-    { id: "chats", icon: "message-circle", label: "Chats" },
-    { id: "calls", icon: "phone", label: "Calls" },
-    { id: "profile", icon: "user", label: "Profile" },
-    { id: "settings", icon: "settings", label: "Settings" }
-  ];
-
-  if (!nav) {
-    console.warn("⚠️ .bottom-nav not found");
-  } else {
-    nav.classList.add("ios-bottom-nav");
-    nav.style.cssText = `
-      position:fixed;
-      bottom:20px;
-      left:50%;
-      transform:translateX(-50%);
-      width:92%;
-      max-width:480px;
-      background:rgba(255,255,255,0.55);
-      backdrop-filter:blur(30px) saturate(180%);
-      border:1px solid rgba(255,255,255,0.4);
-      border-radius:40px;
-      box-shadow:0 10px 25px rgba(0,0,0,0.12);
-      display:flex;
-      justify-content:space-around;
-      align-items:center;
-      padding:10px 0;
-      font-family:'Poppins',sans-serif;
-      z-index:1000;
-      transition:all .3s ease;
-    `;
-
-    const existing = Array.from(nav.children);
-    function makeIconLabel(tab) {
-      const frag = document.createDocumentFragment();
-      const i = document.createElement('i');
-      i.setAttribute('data-lucide', tab.icon);
-      i.style.width = '24px';
-      i.style.height = '24px';
-      i.style.stroke = '#0f172a';
-      frag.appendChild(i);
-      const lbl = document.createElement('div');
-      lbl.style.fontSize = '12px';
-      lbl.style.marginTop = '-2px';
-      lbl.style.color = '#0f172a';
-      lbl.textContent = tab.label;
-      frag.appendChild(lbl);
-      return frag;
-    }
-
-    for (let i = 0; i < tabs.length; i++) {
-      const tab = tabs[i];
-      let item = existing[i];
-      if (item) {
-        while (item.firstChild) item.removeChild(item.firstChild);
-        item.appendChild(makeIconLabel(tab));
-        item.classList.add('nav-item');
-        item.dataset.id = tab.id;
-        item.style.cssText = "text-align:center;cursor:pointer;transition:transform .2s;flex:1;";
-      } else {
-        item = document.createElement('div');
-        item.className = 'nav-item';
-        item.dataset.id = tab.id;
-        item.style.cssText = "text-align:center;cursor:pointer;transition:transform .2s;flex:1;";
-        item.appendChild(makeIconLabel(tab));
-        nav.appendChild(item);
-      }
-    }
-
-    safeInitIcons();
-
-    // --- fixed and simplified correct navigation map ---
-    const routeMap = {
-      chats: "/inbox",          // main chat inbox page
-      calls: "/calls",    // call page
-      profile: "/profile",     // profile page
-      settings: "/settings"    // settings page
-    };
-
-    Array.from(nav.querySelectorAll('.nav-item')).forEach(item => {
-      if (item.getAttribute('data-bound')) return;
-      item.setAttribute('data-bound', '1');
-      item.addEventListener('click', () => {
-        // click animation
-        item.style.transform = 'scale(1.12)';
-        setTimeout(() => item.style.transform = 'scale(1)', 160);
-
-        const id = item.dataset.id;
-        const sub = document.getElementById('subLabel');
-        if (sub) sub.textContent = id.charAt(0).toUpperCase() + id.slice(1);
-
-        // correct routing
-        const target = routeMap[id];
-        if (target && window.location.pathname !== target) {
-          window.location.href = target;
-        }
-      });
-    });
-  }
-
-  // Elegant non-repeating gradient background
-  document.documentElement.style.background = 'linear-gradient(180deg, #f8fafc 0%, #eef2ff 100%)';
-  document.documentElement.style.backgroundRepeat = 'no-repeat';
-  document.documentElement.style.backgroundAttachment = 'fixed';
-
-  const currTop = parseInt(window.getComputedStyle(document.body).paddingTop || '0', 10);
-  if (currTop < 90) document.body.style.paddingTop = '90px';
-  const currBottom = parseInt(window.getComputedStyle(document.body).paddingBottom || '0', 10);
-  if (currBottom < 130) document.body.style.paddingBottom = '130px';
-})();
 
 </script>
 </body>
