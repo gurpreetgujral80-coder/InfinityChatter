@@ -1462,7 +1462,7 @@ Main_Page = r'''<!doctype html>
   <header class="inbox-header">
     <div style="width:100%;max-width:980px;text-align:center;">
       <div style="font-weight:800;font-size:18px;">InfinityChatter</div>
-      <div style="font-size:0.9rem;color:#64748b;margin-top:2px;">👋 <span id="myNameHeader"></span></div>
+      <div style="font-size:0.9rem;color:#64748b;margin-top:2px;"><span id="myNameHeader"></span></div>
     </div>
   </header>
 
@@ -1473,10 +1473,10 @@ Main_Page = r'''<!doctype html>
   </main>
 
   <div class="bottom-nav" role="navigation">
-    <div class="nav-item" id="nav-calls">📞<div>Calls</div></div>
-    <div class="nav-item" id="nav-profile">👤<div>Profile</div></div>
-    <div class="nav-item" id="nav-chats">💬<div>Chats</div></div>
-    <div class="nav-item" id="nav-settings">⚙️<div>Settings</div></div>
+    <div class="nav-item" id="nav-calls"><div>Calls</div></div>
+    <div class="nav-item" id="nav-profile"><div>Profile</div></div>
+    <div class="nav-item" id="nav-chats"><div>Chats</div></div>
+    <div class="nav-item" id="nav-settings"><div>Settings</div></div>
   </div>
 
 <script>
@@ -1521,10 +1521,11 @@ Main_Page = r'''<!doctype html>
   if (!existing) {
     const btn = createAddContactsButton();
     container.prepend(btn);
-    document.getElementById('openAddContactsBtn').addEventListener('click', openAddContactsModal);
+    const openBtn = document.getElementById('openAddContactsBtn');
+    if (openBtn) openBtn.addEventListener('click', openAddContactsModal);
   }
 
-  // modal UI builder (simple)
+  // modal UI builder (no CSV / paste)
   function openAddContactsModal(){
     // overlay
     const overlay = document.createElement('div');
@@ -1538,24 +1539,23 @@ Main_Page = r'''<!doctype html>
         <button id="closeAddContacts" style="background:none;border:none;font-size:18px">✖</button>
       </div>
       <div style="display:flex;gap:12px;margin-bottom:10px">
-        <button id="useContactPicker" style="flex:1;padding:10px;border-radius:8px">Pick from device</button>
-        <button id="pasteOrUpload" style="flex:1;padding:10px;border-radius:8px">Paste / Upload CSV</button>
-        <button id="shareLinkBtn" style="flex:1;padding:10px;border-radius:8px">Share invite link</button>
+        <button id="useContactPicker" style="flex:1;padding:10px;border-radius:8px;background:#e0e7ff;">Pick from device</button>
+        <button id="createInviteLinkBtn" style="flex:1;padding:10px;border-radius:8px;background:#2563eb;color:white;">Create Invite Link</button>
       </div>
       <div id="addContactsResult" style="max-height:320px;overflow:auto"></div>
     `;
     overlay.appendChild(dialog);
     document.body.appendChild(overlay);
 
-    document.getElementById('closeAddContacts').addEventListener('click', ()=> overlay.remove());
-    document.getElementById('useContactPicker').addEventListener('click', pickContactsFromDevice);
-    document.getElementById('pasteOrUpload').addEventListener('click', openManualImport);
-    document.getElementById('shareLinkBtn').addEventListener('click', openShareLinkUI);
+    document.getElementById('closeAddContacts')?.addEventListener('click', ()=> overlay.remove());
+    document.getElementById('useContactPicker')?.addEventListener('click', pickContactsFromDevice);
+    document.getElementById('createInviteLinkBtn')?.addEventListener('click', createInstantShareLink);
   }
 
   // Contacts Picker (modern browsers, HTTPS, Chrome Android)
   async function pickContactsFromDevice(){
     const resultDiv = document.getElementById('addContactsResult');
+    if (!resultDiv) return;
     resultDiv.innerHTML = '<div>Requesting contact permission...</div>';
     try {
       if ('contacts' in navigator && typeof navigator.contacts.select === 'function') {
@@ -1572,7 +1572,7 @@ Main_Page = r'''<!doctype html>
         if (!normalized.length) { resultDiv.innerHTML = '<div>No phone numbers selected.</div>'; return; }
         showSelectedAndSend(normalized);
       } else {
-        resultDiv.innerHTML = '<div>Your browser does not support the Contacts Picker API. Use Paste / Upload option.</div>';
+        resultDiv.innerHTML = '<div>Your browser does not support the Contacts Picker API. Use the invite link option.</div>';
       }
     } catch (err) {
       console.error(err);
@@ -1586,54 +1586,19 @@ Main_Page = r'''<!doctype html>
     return (s + '').replace(/[^0-9+]/g, '');
   }
 
-  // manual import UI
-  function openManualImport(){
-    const resultDiv = document.getElementById('addContactsResult');
-    resultDiv.innerHTML = `
-      <div style="margin-bottom:8px">
-        <textarea id="contactsPaste" placeholder="Paste lines like: John Doe, +911234567890" style="width:100%;height:120px"></textarea>
-      </div>
-      <div style="display:flex;gap:8px">
-        <button id="processPaste" style="padding:8px 12px;border-radius:8px">Process</button>
-        <input id="csvUpload" type="file" accept=".csv,.vcf" />
-      </div>
-      <div id="manualPreview" style="margin-top:8px"></div>
-    `;
-    document.getElementById('processPaste').addEventListener('click', ()=>{
-      const txt = document.getElementById('contactsPaste').value.trim();
-      const items = txt.split('\n').map(l => l.trim()).filter(Boolean).map(line=>{
-        const parts = line.split(',');
-        const name = parts[0].trim();
-        const phone = normalizePhone(parts.slice(1).join('') || parts[0]);
-        return {name, phone};
-      });
-      showSelectedAndSend(items);
-    });
-    document.getElementById('csvUpload').addEventListener('change', async (ev)=>{
-      const f = ev.target.files[0];
-      if (!f) return;
-      const text = await f.text();
-      // naive CSV parse: take lines with comma
-      const items = text.split('\n').map(l => l.trim()).filter(Boolean).map(line=>{
-        const parts = line.split(',');
-        const name = parts[0].trim();
-        const phone = normalizePhone(parts[1] || parts.slice(-1)[0] || '');
-        return {name, phone};
-      });
-      showSelectedAndSend(items);
-    });
-  }
-
   // show selected contacts UI and send to server
   function showSelectedAndSend(list){
     const resultDiv = document.getElementById('addContactsResult');
+    if (!resultDiv) return;
     const uniq = [];
     const seen = new Set();
     for(const it of list){
       if(!it.phone) continue;
-      if(seen.has(it.phone)) continue;
-      seen.add(it.phone);
-      uniq.push(it);
+      const p = normalizePhone(it.phone);
+      if(!p) continue;
+      if(seen.has(p)) continue;
+      seen.add(p);
+      uniq.push({name: it.name || '', phone: p});
     }
     if(!uniq.length){ resultDiv.innerHTML = '<div>No valid phone numbers found.</div>'; return;}
     resultDiv.innerHTML = '<div style="margin-bottom:8px">Selected contacts:</div>';
@@ -1658,12 +1623,13 @@ Main_Page = r'''<!doctype html>
     bulk.style.gridColumn = '1/-1';
     bulk.innerHTML = `<div style="margin-top:12px"><button id="bulkAddBtn" style="padding:8px 12px;border-radius:10px;background:#0f172a;color:#fff">Add All ${uniq.length}</button></div>`;
     resultDiv.appendChild(ul); resultDiv.appendChild(bulk);
-    document.getElementById('bulkAddBtn').addEventListener('click', ()=> sendSelectedToServer(uniq));
+    document.getElementById('bulkAddBtn')?.addEventListener('click', ()=> sendSelectedToServer(uniq));
   }
 
   // send to server /api/contacts_add
   async function sendSelectedToServer(items){
     const resultDiv = document.getElementById('addContactsResult');
+    if (!resultDiv) return;
     resultDiv.innerHTML = '<div>Saving contacts…</div>';
     try {
       const resp = await fetch('/api/contacts_add', {
@@ -1671,7 +1637,7 @@ Main_Page = r'''<!doctype html>
         headers: {'Content-Type':'application/json'},
         body: JSON.stringify({contacts: items})
       });
-      const j = await resp.json();
+      const j = await resp.json().catch(()=>({}));
       if (!resp.ok) {
         resultDiv.innerHTML = `<div style="color:red">Error: ${j.error || resp.status}</div>`;
         return;
@@ -1692,26 +1658,36 @@ Main_Page = r'''<!doctype html>
         });
       }
       resultDiv.innerHTML = html;
-      // wire share invite buttons
+      // wire share invite buttons — create link WITHOUT prompting for number (but send phone in body if available)
       Array.from(document.getElementsByClassName('shareInviteBtn')).forEach(b=>{
+        if (b.getAttribute('data-bound')) return;
+        b.setAttribute('data-bound','1');
         b.addEventListener('click', async (ev)=>{
-          const phone = b.dataset.phone;
+          const phone = b.dataset.phone || null;
           b.textContent = 'Creating…';
-          const r = await fetch('/api/create_contact_invite', {
-            method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({phone})
-          });
-          const jr = await r.json();
-          if (jr && jr.url) {
-            // copy link to clipboard and show
-            await navigator.clipboard.writeText(jr.url).catch(()=>{});
-            b.textContent = 'Copied link';
-            // optionally show share sheet
-            if (navigator.share) {
-              try { await navigator.share({title:'Join me on InfinityChatter', text:'Join me on InfinityChatter', url: jr.url}); } catch(e){}
+          try {
+            // create invite without prompting: send phone if you want server to prefill, but do not ask user
+            const r = await fetch('/api/create_contact_invite', {
+              method:'POST',
+              headers:{'Content-Type':'application/json'},
+              body: JSON.stringify(phone ? {phone} : {})
+            });
+            const jr = await r.json().catch(()=>({}));
+            if (r.ok && jr && jr.url) {
+              await navigator.clipboard.writeText(jr.url).catch(()=>{});
+              b.textContent = 'Copied link';
+              if (navigator.share) {
+                try { await navigator.share({title:'Join me on InfinityChatter', text:'Join me on InfinityChatter ♾️', url: jr.url}); } catch(e){}
+              } else {
+                /* graceful fallback — show tiny tooltip/alert */
+                alert('Invite link copied to clipboard:\n' + jr.url);
+              }
             } else {
-              alert('Invite link copied to clipboard:\\n' + jr.url);
+              b.textContent = 'Error';
+              console.error('create_contact_invite failed', jr);
             }
-          } else {
+          } catch (err) {
+            console.error(err);
             b.textContent = 'Error';
           }
         });
@@ -1722,30 +1698,43 @@ Main_Page = r'''<!doctype html>
     }
   }
 
-  // share link UI dialog
-  function openShareLinkUI(){
-    const resultDiv = document.getElementById('addContactsResult');
-    resultDiv.innerHTML = `
-      <div style="margin-bottom:8px">Create a share link anyone can open to join:</div>
-      <div style="display:flex;gap:8px">
-        <input id="sharePhone" placeholder="Optional phone (prefill)" style="flex:1;padding:8px;border-radius:8px" />
-        <button id="createShareLink" style="padding:8px 12px;border-radius:8px">Create</button>
-      </div>
-      <div id="shareResult" style="margin-top:10px"></div>
-    `;
-    document.getElementById('createShareLink').addEventListener('click', async ()=>{
-      const phone = document.getElementById('sharePhone').value.trim();
-      const r = await fetch('/api/create_contact_invite', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({phone: phone || null})});
-      const j = await r.json();
-      const el = document.getElementById('shareResult');
-      if (j && j.url) {
-        el.innerHTML = `<div>Link: <input style="width:70%" value="${j.url}" id="shareLinkInput" /><button id="copyInvite">Copy</button></div>`;
-        document.getElementById('copyInvite').addEventListener('click', ()=>{
-          navigator.clipboard.writeText(j.url);
-          alert('Copied');
+  // instant invite creation (no phone input)
+  async function createInstantShareLink(){
+    const resDiv = document.getElementById('addContactsResult');
+    if (!resDiv) return;
+    resDiv.innerHTML = 'Creating invite link...';
+    try {
+      const res = await fetch('/api/create_contact_invite', {
+        method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({})
+      });
+      const j = await res.json().catch(()=>({}));
+      if (res.ok && j && j.url) {
+        await navigator.clipboard.writeText(j.url).catch(()=>{});
+        resDiv.innerHTML = `<div>✅ Invite link created & copied!<br><br>
+          <input style="width:90%;padding:6px;border:1px solid #ccc;border-radius:8px" value="${j.url}" readonly />
+          <div style="margin-top:8px">
+            <button id="copyInviteBtn" style="padding:6px 10px;border-radius:8px;margin-right:8px">Copy</button>
+            <button id="openInviteBtn" style="padding:6px 10px;border-radius:8px;background:#0f172a;color:white">Open</button>
+          </div>
+        </div>`;
+        document.getElementById('copyInviteBtn')?.addEventListener('click', ()=>{
+          navigator.clipboard.writeText(j.url).catch(()=>{});
+          alert('Copied to clipboard');
         });
-      } else el.innerHTML = '<div style="color:red">Error creating link</div>';
-    });
+        document.getElementById('openInviteBtn')?.addEventListener('click', ()=>{
+          window.open(j.url, '_blank');
+        });
+        // try native share
+        if (navigator.share) {
+          try { await navigator.share({ title: 'Join me on InfinityChatter', text: 'Join me on InfinityChatter ♾️', url: j.url }); } catch(e) {}
+        }
+      } else {
+        resDiv.innerHTML = `<div style="color:red">Failed to create link: ${j.error || res.status}</div>`;
+      }
+    } catch (err) {
+      console.error(err);
+      resDiv.innerHTML = '<div style="color:red">Network or internal error.</div>';
+    }
   }
 
   // optional: listen for realtime invites or contact notifications
@@ -1753,7 +1742,7 @@ Main_Page = r'''<!doctype html>
     socket.on && socket.on('contact_added_by_invite', (d)=> {
       // show small toast
       console.log('Contact added via invite', d);
-      alert(`${d.new_name} (${d.new_phone}) joined via your invite.`);
+      try { alert(`${d.new_name} (${d.new_phone}) joined via your invite.`); } catch(e){}
     });
     socket.on && socket.on('contacts_updated', (d)=>{
       if (d.owner === window.MYNAME || d.owner === (window.cs && cs.myName)) {
