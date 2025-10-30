@@ -1451,19 +1451,19 @@ def proxy_dicebear():
 
 @app.route('/inbox')
 def inbox_page():
-    return render_template_string("Main_Page.html")
+    return render_template_string("static/Main_Page.html")
 
 @app.route('/calls')
 def calls_page():
-    return render_template_string("Calls_Page.html")
+    return render_template_string("static/Calls_Page.html")
 
 @app.route('/profile')
 def profile_page():
-    return render_template_string("Profile_Page.html")
+    return render_template_string("static/Profile_Page.html")
 
 @app.route('/settings')
 def settings_page():
-    return render_template_string("Setting_Page.html")
+    return render_template_string("static/Settings_Page.html")
 
 # ---------- END contacts/inbox addition ----------
 LOGIN_HTML = r'''<!doctype html>
