@@ -7616,6 +7616,17 @@ def cleanup_demo():
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)})
 
+@app.route('/api/purge_demo_contacts')
+def purge_demo_contacts():
+    import sqlite3
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("DELETE FROM users WHERE name IN ('alice','bob')")
+    cur.execute("DELETE FROM messages WHERE sender IN ('alice','bob')")
+    conn.commit()
+    conn.close()
+    return {"ok": True, "message": "Demo users removed"}
+
 # ----- run -----
 if __name__ == "__main__":
     print("DB:", DB_PATH)
