@@ -1458,7 +1458,7 @@ Main_Page = r'''<!doctype html>
   <script src="https://cdn.tailwindcss.com"></script>
   <style>
     header.inbox-header { position:fixed; top:0; left:0; right:0; height:64px; display:flex; align-items:center; justify-content:center; background: rgba(255,255,255,0.9); backdrop-filter: blur(6px); z-index:50; box-shadow:0 1px 6px rgba(0,0,0,0.04); }
-    main.inbox-main { padding:84px 16px 110px; max-width:980px; margin:0 auto; }
+    main.inbox-main { padding:1px 16px 5px; max-width:980px; margin:0 auto; }
     .contact-card { display:flex; gap:12px; align-items:center; padding:12px; border-radius:12px; margin-bottom:12px; background:#fff; cursor:pointer; box-shadow:0 6px 18px rgba(2,6,23,0.04); }
     .contact-avatar{ width:56px; height:56px; border-radius:12px; overflow:hidden; display:flex; align-items:center; justify-content:center; background:#eef; font-weight:700; }
     .bottom-nav{ position:fixed; left:50%; transform:translateX(-50%); bottom:16px; width: min(760px, calc(100% - 36px)); background: rgba(255,255,255,0.65); backdrop-filter: blur(8px); border-radius:18px; padding:8px 14px; display:flex; justify-content:space-around; align-items:center; z-index:60; }
@@ -1480,9 +1480,9 @@ Main_Page = r'''<!doctype html>
   </main>
 
   <div class="bottom-nav" role="navigation">
+    <div class="nav-item" id="nav-chats"><div>Chats</div></div>
     <div class="nav-item" id="nav-calls"><div>Calls</div></div>
     <div class="nav-item" id="nav-profile"><div>Profile</div></div>
-    <div class="nav-item" id="nav-chats"><div>Chats</div></div>
     <div class="nav-item" id="nav-settings"><div>Settings</div></div>
   </div>
 
@@ -1726,9 +1726,20 @@ Main_Page = r'''<!doctype html>
         if (res.ok && j && j.url) {
           // same behavior as earlier
           await navigator.clipboard.writeText(j.url).catch(()=>{});
-          resDiv.innerHTML = `<div>✅ Invite link created & copied!<br><br>
-            <input style="width:90%;padding:6px;border:1px solid #ccc;border-radius:8px" value="${j.url}" readonly />
-          </div>`;
+          resDiv.innerHTML = `
+              <div>✅ Invite link created!<br><br>
+                <div style="display:flex;gap:8px;align-items:center;">
+                  <input id="inviteLinkInput" style="flex:1;padding:6px;border:1px solid #ccc;border-radius:8px" value="${j.url}" readonly />
+                  <button id="copyInviteLinkBtn" style="padding:6px 10px;border-radius:8px;background:#0f172a;color:#fff;">Copy</button>
+                </div>
+              </div>`;
+              
+          document.getElementById('copyInviteLinkBtn')?.addEventListener('click', async ()=>{
+              const link = document.getElementById('inviteLinkInput').value;
+              await navigator.clipboard.writeText(link).catch(()=>{});
+              alert('Copied link to clipboard!');
+          });
+
         } else {
           resDiv.innerHTML = `<div style="color:red">Failed to create link: ${j.error || res.status}</div>`;
         }
@@ -1760,6 +1771,40 @@ Main_Page = r'''<!doctype html>
     }
   }
 
+  function ensureHeaderAddButton() {
+      // check if the button already exists
+      if (document.getElementById('headerAddBtn')) return;
+    
+      // find your header
+      const header = document.querySelector('header');
+      if (!header) return;
+    
+      // create the + button
+      const btn = document.createElement('button');
+      btn.id = 'headerAddBtn';
+      btn.textContent = '+';
+      btn.title = 'Add Contact';
+      btn.style.cssText = `
+        position:absolute;
+        right:18px;
+        top:14px;
+        width:38px;
+        height:38px;
+        border-radius:50%;
+        background:#0f172a;
+        color:#fff;
+        font-size:24px;
+        border:none;
+        cursor:pointer;
+        box-shadow:0 3px 8px rgba(0,0,0,0.1);
+        display:flex;
+        align-items:center;
+        justify-content:center;
+      `;
+      btn.addEventListener('click', openAddContactsModal); // reuse same modal function
+      header.appendChild(btn);
+  }
+
   function renderContacts(list){
       const container = document.getElementById('contactsContainer');
       container.innerHTML = '';
@@ -1767,14 +1812,18 @@ Main_Page = r'''<!doctype html>
       const addBox = document.getElementById('addContactsBox');
     
       if(!list.length){
-          // Show "No contacts" and make sure Add Contacts box is visible
-          container.innerHTML = '<div style="padding:18px;color:#64748b">No contacts yet</div>';
-          if (addBox) addBox.style.display = 'flex';
-          return;
+        // No contacts → show Add Contacts box and remove header button if present
+        container.innerHTML = '<div style="padding:18px;color:#64748b">No contacts yet</div>';
+        if (addBox) addBox.style.display = 'flex';
+        const headerBtn = document.getElementById('headerAddBtn');
+        if (headerBtn) headerBtn.remove();
+        return;
       }
-    
-      // Hide Add Contacts box if user already has at least one contact
-      if (addBox) addBox.style.display = 'none';
+
+        // At least one contact → hide big Add box and add header button
+        if (addBox) addBox.style.display = 'none';
+        ensureHeaderAddButton();
+
     
       list.forEach(item=>{
         const card = document.createElement('div');
