@@ -497,15 +497,22 @@ def api_contacts_add():
 # --- API: create a share invite link for a phone (or general invite) ---
 @app.route('/api/create_contact_invite', methods=['POST'])
 def api_create_contact_invite():
-    username = session.get('username')
+    from flask import request, session as flask_session, jsonify
+
+    body = request.get_json(silent=True) or {}
+    # accept username from session OR from body
+    username = flask_session.get('username') or body.get('username')
+
     if not username:
         return jsonify({"error": "not_logged_in"}), 401
-    body = request.get_json() or {}
+
     phone = body.get('phone')  # optional
     token = create_contact_invite(username, phone=phone)
+
     # make invite URL (absolute)
     base = request.url_root.rstrip('/')
     invite_url = f"{base}/invite/{token}"
+
     return jsonify({"ok": True, "url": invite_url, "token": token})
 
 # --- Public invite landing page (show simple registration prefilling phone) ---
@@ -1660,37 +1667,39 @@ Main_Page = r'''<!doctype html>
       resultDiv.innerHTML = html;
       // wire share invite buttons — create link WITHOUT prompting for number (but send phone in body if available)
       Array.from(document.getElementsByClassName('shareInviteBtn')).forEach(b=>{
-        if (b.getAttribute('data-bound')) return;
-        b.setAttribute('data-bound','1');
-        b.addEventListener('click', async (ev)=>{
-          const phone = b.dataset.phone || null;
-          b.textContent = 'Creating…';
-          try {
-            // create invite without prompting: send phone if you want server to prefill, but do not ask user
+          b.addEventListener('click', async (ev)=>{
+            const phone = b.dataset.phone || null;
+            b.textContent = 'Creating…';
+        
+            // get saved profile name
+            const profile = JSON.parse(localStorage.getItem('infinity_profile') || '{}');
+            const username = profile.name || profile.username || null;
+        
+            const body = phone ? { phone } : {};
+            if (username) body.username = username;  // include username if available
+        
             const r = await fetch('/api/create_contact_invite', {
-              method:'POST',
-              headers:{'Content-Type':'application/json'},
-              body: JSON.stringify(phone ? {phone} : {})
+              method: 'POST',
+              headers: {'Content-Type': 'application/json'},
+              body: JSON.stringify(body)
             });
+        
             const jr = await r.json().catch(()=>({}));
-            if (r.ok && jr && jr.url) {
+        
+            if (jr && jr.url) {
               await navigator.clipboard.writeText(jr.url).catch(()=>{});
               b.textContent = 'Copied link';
               if (navigator.share) {
-                try { await navigator.share({title:'Join me on InfinityChatter', text:'Join me on InfinityChatter ♾️', url: jr.url}); } catch(e){}
+                try {
+                  await navigator.share({title:'Join me on InfinityChatter', text:'Join me on InfinityChatter ♾️', url: jr.url});
+                } catch(e){}
               } else {
-                /* graceful fallback — show tiny tooltip/alert */
                 alert('Invite link copied to clipboard:\n' + jr.url);
               }
             } else {
               b.textContent = 'Error';
-              console.error('create_contact_invite failed', jr);
             }
-          } catch (err) {
-            console.error(err);
-            b.textContent = 'Error';
-          }
-        });
+          });
       });
     } catch (err) {
       console.error(err);
@@ -1698,58 +1707,35 @@ Main_Page = r'''<!doctype html>
     }
   }
 
-  // instant invite creation (no phone input)
   async function createInstantShareLink(){
-    const resDiv = document.getElementById('addContactsResult');
-    if (!resDiv) return;
-    resDiv.innerHTML = 'Creating invite link...';
-    try {
-      const res = await fetch('/api/create_contact_invite', {
-        method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({})
-      });
-      const j = await res.json().catch(()=>({}));
-      if (res.ok && j && j.url) {
-        await navigator.clipboard.writeText(j.url).catch(()=>{});
-        resDiv.innerHTML = `<div>✅ Invite link created & copied!<br><br>
-          <input style="width:90%;padding:6px;border:1px solid #ccc;border-radius:8px" value="${j.url}" readonly />
-          <div style="margin-top:8px">
-            <button id="copyInviteBtn" style="padding:6px 10px;border-radius:8px;margin-right:8px">Copy</button>
-            <button id="openInviteBtn" style="padding:6px 10px;border-radius:8px;background:#0f172a;color:white">Open</button>
-          </div>
-        </div>`;
-        document.getElementById('copyInviteBtn')?.addEventListener('click', ()=>{
-          navigator.clipboard.writeText(j.url).catch(()=>{});
-          alert('Copied to clipboard');
+      const resDiv = document.getElementById('addContactsResult');
+      if (!resDiv) return;
+      resDiv.innerHTML = 'Creating invite link...';
+    
+      // read local profile (if you store it)
+      const profile = JSON.parse(localStorage.getItem('infinity_profile')||'{}');
+      const username = profile.name || profile.username || null; // best-effort identity
+    
+      try {
+        const res = await fetch('/api/create_contact_invite', {
+          method: 'POST',
+          headers: {'Content-Type':'application/json'},
+          body: JSON.stringify(username ? { username } : {}) // include username if available
         });
-        document.getElementById('openInviteBtn')?.addEventListener('click', ()=>{
-          window.open(j.url, '_blank');
-        });
-        // try native share
-        if (navigator.share) {
-          try { await navigator.share({ title: 'Join me on InfinityChatter', text: 'Join me on InfinityChatter ♾️', url: j.url }); } catch(e) {}
+        const j = await res.json().catch(()=>({}));
+        if (res.ok && j && j.url) {
+          // same behavior as earlier
+          await navigator.clipboard.writeText(j.url).catch(()=>{});
+          resDiv.innerHTML = `<div>✅ Invite link created & copied!<br><br>
+            <input style="width:90%;padding:6px;border:1px solid #ccc;border-radius:8px" value="${j.url}" readonly />
+          </div>`;
+        } else {
+          resDiv.innerHTML = `<div style="color:red">Failed to create link: ${j.error || res.status}</div>`;
         }
-      } else {
-        resDiv.innerHTML = `<div style="color:red">Failed to create link: ${j.error || res.status}</div>`;
+      } catch (err) {
+        console.error(err);
+        resDiv.innerHTML = '<div style="color:red">Network or internal error.</div>';
       }
-    } catch (err) {
-      console.error(err);
-      resDiv.innerHTML = '<div style="color:red">Network or internal error.</div>';
-    }
-  }
-
-  // optional: listen for realtime invites or contact notifications
-  if (socket) {
-    socket.on && socket.on('contact_added_by_invite', (d)=> {
-      // show small toast
-      console.log('Contact added via invite', d);
-      try { alert(`${d.new_name} (${d.new_phone}) joined via your invite.`); } catch(e){}
-    });
-    socket.on && socket.on('contacts_updated', (d)=>{
-      if (d.owner === window.MYNAME || d.owner === (window.cs && cs.myName)) {
-        console.log('Contacts updated');
-        // optionally refresh contact list UI by calling /api/contacts
-      }
-    });
   }
 })();
 
@@ -7608,6 +7594,27 @@ def poll_alias():
 
     msgs = fetch_messages(since)
     return jsonify(msgs)
+
+# --- Admin: one-time cleanup for demo/test contacts ---
+@app.route('/admin/cleanup_demo')
+def cleanup_demo():
+    import sqlite3, os
+    from flask import jsonify
+
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cur = conn.cursor()
+
+        # delete any contacts whose name looks like demo/test
+        cur.execute("DELETE FROM users WHERE name LIKE '%demo%' OR name LIKE '%test%';")
+        cur.execute("DELETE FROM messages WHERE sender LIKE '%demo%' OR sender LIKE '%test%';")
+
+        conn.commit()
+        conn.close()
+
+        return jsonify({"ok": True, "message": "Demo/test users and messages removed."})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)})
 
 # ----- run -----
 if __name__ == "__main__":
