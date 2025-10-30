@@ -1761,25 +1761,34 @@ Main_Page = r'''<!doctype html>
   }
 
   function renderContacts(list){
-    const container = document.getElementById('contactsContainer');
-    container.innerHTML = '';
-    if(!list.length){
-      container.innerHTML = '<div style="padding:18px;color:#64748b">No contacts yet</div>';
-      return;
-    }
-    list.forEach(item=>{
-      const card = document.createElement('div');
-      card.className = 'contact-card';
-      card.innerHTML = `
-        <div class="contact-avatar">${ item.avatar_url ? '<img src="'+escapeHtml(item.avatar_url)+'" style="width:56px;height:56px;object-fit:cover;border-radius:8px;">' : escapeHtml((item.name||'')[0]||'?') }</div>
-        <div style="flex:1">
-          <div style="font-weight:700">${escapeHtml(item.name || item.contact)}</div>
-          <div style="color:#64748b;font-size:0.9rem;margin-top:6px">${escapeHtml(item.last_text||'')}</div>
-        </div>
-        <div style="color:#94a3b8;font-size:0.85rem">${item.last_ts?new Date(item.last_ts*1000).toLocaleString():''}</div>`;
-      card.addEventListener('click', ()=> window.location.href = '/chat?peer=' + encodeURIComponent(item.contact));
-      container.appendChild(card);
-    });
+      const container = document.getElementById('contactsContainer');
+      container.innerHTML = '';
+    
+      const addBox = document.getElementById('addContactsBox');
+    
+      if(!list.length){
+          // Show "No contacts" and make sure Add Contacts box is visible
+          container.innerHTML = '<div style="padding:18px;color:#64748b">No contacts yet</div>';
+          if (addBox) addBox.style.display = 'flex';
+          return;
+      }
+    
+      // Hide Add Contacts box if user already has at least one contact
+      if (addBox) addBox.style.display = 'none';
+    
+      list.forEach(item=>{
+        const card = document.createElement('div');
+        card.className = 'contact-card';
+        card.innerHTML = `
+          <div class="contact-avatar">${ item.avatar_url ? '<img src="'+escapeHtml(item.avatar_url)+'" style="width:56px;height:56px;object-fit:cover;border-radius:8px;">' : escapeHtml((item.name||'')[0]||'?') }</div>
+          <div style="flex:1">
+            <div style="font-weight:700">${escapeHtml(item.name || item.contact)}</div>
+            <div style="color:#64748b;font-size:0.9rem;margin-top:6px">${escapeHtml(item.last_text||'')}</div>
+          </div>
+          <div style="color:#94a3b8;font-size:0.85rem">${item.last_ts?new Date(item.last_ts*1000).toLocaleString():''}</div>`;
+        card.addEventListener('click', ()=> window.location.href = '/chat?peer=' + encodeURIComponent(item.contact));
+        container.appendChild(card);
+      });
   }
 
   document.getElementById('nav-calls').addEventListener('click', ()=> window.location.href='/calls');
@@ -7156,11 +7165,9 @@ def send_composite_message():
 def contacts_list_api():
     username = session.get('username') or request.args.get('username')
     if not username:
-        # demo fallback
-        return jsonify({'contacts': [
-            {'contact':'alice','name':'Alice','last_text':'Hey!','last_ts': int(time.time())-60, 'avatar_url': '/avatar/alice'},
-            {'contact':'bob','name':'Bob','last_text':'See you','last_ts': int(time.time())-3600, 'avatar_url': '/avatar/bob'}
-        ]})
+        # not logged in → return empty list instead of demo users
+        return jsonify({'contacts': []})
+
     try:
         conn = sqlite3.connect(DB_PATH)
         cur = conn.cursor()
@@ -7181,7 +7188,8 @@ def contacts_list_api():
         seen = set()
         for r in rows:
             c = r[0]
-            if not c or c in seen: continue
+            if not c or c in seen:
+                continue
             contacts.append({
                 'contact': c,
                 'name': c,
@@ -7582,7 +7590,6 @@ def send_message():
         app.logger.exception('send_message error')
         return jsonify({'error': str(e)}), 500
 
-
 @app.route('/poll')
 @app.route('/messages')
 @app.route('/get_messages')
@@ -7594,39 +7601,7 @@ def poll_alias():
 
     msgs = fetch_messages(since)
     return jsonify(msgs)
-
-# --- Admin: one-time cleanup for demo/test contacts ---
-@app.route('/admin/cleanup_demo')
-def cleanup_demo():
-    import sqlite3, os
-    from flask import jsonify
-
-    try:
-        conn = sqlite3.connect(DB_PATH)
-        cur = conn.cursor()
-
-        # delete any contacts whose name looks like demo/test
-        cur.execute("DELETE FROM users WHERE name LIKE '%demo%' OR name LIKE '%test%';")
-        cur.execute("DELETE FROM messages WHERE sender LIKE '%demo%' OR sender LIKE '%test%';")
-
-        conn.commit()
-        conn.close()
-
-        return jsonify({"ok": True, "message": "Demo/test users and messages removed."})
-    except Exception as e:
-        return jsonify({"ok": False, "error": str(e)})
-
-@app.route('/api/purge_demo_contacts')
-def purge_demo_contacts():
-    import sqlite3
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-    cur.execute("DELETE FROM users WHERE name IN ('alice','bob')")
-    cur.execute("DELETE FROM messages WHERE sender IN ('alice','bob')")
-    conn.commit()
-    conn.close()
-    return {"ok": True, "message": "Demo users removed"}
-
+    
 # ----- run -----
 if __name__ == "__main__":
     print("DB:", DB_PATH)
