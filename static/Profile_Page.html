@@ -31,7 +31,7 @@
   <div class="bottom-nav" role="navigation">
     <div class="nav-item" id="nav-chats"><div>Chats</div></div>
     <div class="nav-item" id="nav-calls"><div>Calls</div></div>
-    <div class="nav-item" id="nav-profile"><div>Profile</div></div>
+    <div class="nav-item" id="nav-profile"><div>Updates</div></div>
     <div class="nav-item" id="nav-settings"><div>Settings</div></div>
   </div>
 
@@ -452,7 +452,7 @@
   `;
   header.innerHTML = `
     <div style="font-family:'Pacifico',cursive;font-size:32px;font-weight:500;color:#0f172a;line-height:1;">InfinityChatter</div>
-    <div id="subLabel" style="font-family:'Poppins',sans-serif;font-size:15px;color:#475569;margin-top:3px;">Chats</div>
+    <div id="subLabel" style="font-family:'Poppins',sans-serif;font-size:15px;color:#475569;margin-top:3px;">Updates</div>
   `;
   document.body.prepend(header);
 
@@ -460,7 +460,7 @@
   const tabs = [
     { id: "chats", icon: "message-circle", label: "Chats" },
     { id: "calls", icon: "phone", label: "Calls" },
-    { id: "profile", icon: "user", label: "Profile" },
+    { id: "Updates", icon: "user", label: "Updates" },
     { id: "settings", icon: "settings", label: "Settings" }
   ];
 
@@ -532,7 +532,7 @@
     const routeMap = {
       chats: "/inbox",          // main chat inbox page
       calls: "/calls",    // call page
-      profile: "/profile",     // profile page
+      Updates: "/updates",     // Updates page
       settings: "/settings"    // settings page
     };
 
