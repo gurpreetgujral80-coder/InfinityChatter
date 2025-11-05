@@ -1451,11 +1451,11 @@ def proxy_dicebear():
 
 @app.route('/inbox')
 def inbox_page():
-    return send_from_directory('static', 'Main_Page.html')
+    return send_from_directory('static', 'Main_page.html')
 
 @app.route('/calls')
 def calls_page():
-    return send_from_directory('static', 'Calls_Page.html')
+    return send_from_directory('static', 'Call_Page.html')
 
 @app.route('/profile')
 def profile_page():
