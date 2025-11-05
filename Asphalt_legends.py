@@ -15,7 +15,7 @@ import requests
 from datetime import datetime
 from flask import (
     Flask, render_template_string, request, jsonify, session, current_app,
-    redirect, url_for, send_from_directory, abort, make_response, session, render_template
+    redirect, url_for, send_from_directory, abort, make_response, session,
 )
 from werkzeug.utils import secure_filename
 from flask_socketio import SocketIO, emit, join_room, leave_room
@@ -1451,19 +1451,19 @@ def proxy_dicebear():
 
 @app.route('/inbox')
 def inbox_page():
-    return render_template("static/Main_Page.html")
+    return send_from_directory('static', 'Main_Page.html')
 
 @app.route('/calls')
 def calls_page():
-    return render_template("static/Calls_Page.html")
+    return send_from_directory('static', 'Calls_Page.html')
 
 @app.route('/profile')
 def profile_page():
-    return render_template("static/Profile_Page.html")
+    return send_from_directory('static', 'Profile_Page.html')
 
 @app.route('/settings')
 def settings_page():
-    return render_template("static/Settings_Page.html")
+    return send_from_directory('static', 'Settings_Page.html')
 
 # ---------- END contacts/inbox addition ----------
 LOGIN_HTML = r'''<!doctype html>
