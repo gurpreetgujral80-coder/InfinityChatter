@@ -583,11 +583,11 @@
   const routeMap = {
     chats: '/inbox',
     calls: '/calls',
-    profile: '/profile',
+    Updates: '/Updates',
     settings: '/settings'
   };
 
-  const tabOrder = ['chats', 'calls', 'profile', 'settings'];
+  const tabOrder = ['chats', 'calls', 'Updates', 'settings'];
   let currentTab = Object.keys(routeMap).find(k => window.location.pathname.includes(k)) || 'chats';
 
   function slideToPage(targetId){
