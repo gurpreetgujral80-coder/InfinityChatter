@@ -6691,9 +6691,7 @@ def contacts_list_api():
 @app.route('/chat_temparory')
 def chat_temparory():
     username = session.get('username');
-    if not username: return redirect(url_for('index'))
     user = load_user_by_name(username);
-    if not user: return redirect(url_for('index'))
     owner = get_owner(); partner = get_partner()
     is_owner = user.get("is_owner", False); is_partner = user.get("is_partner", False)
     owner_name = owner["name"] if owner else None; partner_name = partner["name"] if partner else None
