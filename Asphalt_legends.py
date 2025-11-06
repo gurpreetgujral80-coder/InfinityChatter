@@ -1457,8 +1457,8 @@ def inbox_page():
 def calls_page():
     return send_from_directory('static', 'Call_Page.html')
 
-@app.route('/profile')
-def profile_page():
+@app.route('/Updates')
+def Updates_page():
     return send_from_directory('static', 'Profile_Page.html')
 
 @app.route('/settings')
