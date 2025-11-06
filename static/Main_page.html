@@ -15,26 +15,27 @@
   </style>
 </head>
 <body>
-  <header class="inbox-header">
-    <div style="width:100%;max-width:980px;text-align:center;">
-      <div style="font-weight:800;font-size:18px;">InfinityChatter</div>
-      <div style="font-size:0.9rem;color:#64748b;margin-top:2px;"><span id="myNameHeader"></span></div>
+  <div id="pageContent">
+    <header class="inbox-header">
+      <div style="width:100%;max-width:980px;text-align:center;">
+        <div style="font-weight:800;font-size:18px;">InfinityChatter</div>
+        <div style="font-size:0.9rem;color:#64748b;margin-top:2px;"><span id="myNameHeader"></span></div>
+      </div>
+    </header>
+  
+    <main class="inbox-main">
+      <div id="contactsContainer">
+        <div style="padding:18px;color:#64748b">Loading contacts…</div>
+      </div>
+    </main>
+  
+    <div class="bottom-nav" role="navigation">
+      <div class="nav-item" id="nav-chats"><div>Chats</div></div>
+      <div class="nav-item" id="nav-calls"><div>Calls</div></div>
+      <div class="nav-item" id="nav-Updates"><div>Updates</div></div>
+      <div class="nav-item" id="nav-settings"><div>Settings</div></div>
     </div>
-  </header>
-
-  <main class="inbox-main">
-    <div id="contactsContainer">
-      <div style="padding:18px;color:#64748b">Loading contacts…</div>
-    </div>
-  </main>
-
-  <div class="bottom-nav" role="navigation">
-    <div class="nav-item" id="nav-chats"><div>Chats</div></div>
-    <div class="nav-item" id="nav-calls"><div>Calls</div></div>
-    <div class="nav-item" id="nav-Updates"><div>Updates</div></div>
-    <div class="nav-item" id="nav-settings"><div>Settings</div></div>
   </div>
-
 <script>
 (async function(){
   // Requires cs.socket or window.socket for socket.io if you use it
