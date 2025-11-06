@@ -12,27 +12,39 @@
     .contact-avatar{ width:56px; height:56px; border-radius:12px; overflow:hidden; display:flex; align-items:center; justify-content:center; background:#eef; font-weight:700; }
     .bottom-nav{ position:fixed; left:50%; transform:translateX(-50%); bottom:16px; width: min(760px, calc(100% - 36px)); background: rgba(255,255,255,0.65); backdrop-filter: blur(8px); border-radius:18px; padding:8px 14px; display:flex; justify-content:space-around; align-items:center; z-index:60; }
     .nav-item{ display:flex; flex-direction:column; align-items:center; font-size:0.9rem; color:#0f172a; cursor:pointer; padding:6px 8px; border-radius:10px; }
+    #pageContent {
+      position: relative;
+      transition: transform .35s ease;
+      will-change: transform;
+      overflow-x: hidden;
+    }
+    body {
+      overflow-x: hidden;
+    }
+
   </style>
 </head>
 <body>
-  <header class="inbox-header">
-    <div style="width:100%;max-width:980px;text-align:center;">
-      <div style="font-weight:800;font-size:18px;">InfinityChatter</div>
-      <div style="font-size:0.9rem;color:#64748b;margin-top:2px;"><span id="myNameHeader"></span></div>
+  <div id="pageContent">
+    <header class="inbox-header">
+      <div style="width:100%;max-width:980px;text-align:center;">
+        <div style="font-weight:800;font-size:18px;">InfinityChatter</div>
+        <div style="font-size:0.9rem;color:#64748b;margin-top:2px;"><span id="myNameHeader"></span></div>
+      </div>
+    </header>
+  
+    <main class="inbox-main">
+      <div id="contactsContainer">
+        <div style="padding:18px;color:#64748b">Loading contacts…</div>
+      </div>
+    </main>
+  
+    <div class="bottom-nav" role="navigation">
+      <div class="nav-item" id="nav-chats"><div>Chats</div></div>
+      <div class="nav-item" id="nav-calls"><div>Calls</div></div>
+      <div class="nav-item" id="nav-Updates"><div>Updates</div></div>
+      <div class="nav-item" id="nav-settings"><div>Settings</div></div>
     </div>
-  </header>
-
-  <main class="inbox-main">
-    <div id="contactsContainer">
-      <div style="padding:18px;color:#64748b">Loading contacts…</div>
-    </div>
-  </main>
-
-  <div class="bottom-nav" role="navigation">
-    <div class="nav-item" id="nav-chats"><div>Chats</div></div>
-    <div class="nav-item" id="nav-calls"><div>Calls</div></div>
-    <div class="nav-item" id="nav-Updates"><div>Updates</div></div>
-    <div class="nav-item" id="nav-settings"><div>Settings</div></div>
   </div>
 
 <script>
