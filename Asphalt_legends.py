@@ -7400,7 +7400,18 @@ def poll_alias():
 
     msgs = fetch_messages(since)
     return jsonify(msgs)
-    
+
+# --- Temporary debug: inspect contacts table structure ---
+@app.route('/debug/contacts_schema')
+def debug_contacts_schema():
+    import sqlite3, json
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("PRAGMA table_info(contacts);")
+    cols = cur.fetchall()
+    conn.close()
+    return json.dumps(cols)
+
 # ----- run -----
 if __name__ == "__main__":
     print("DB:", DB_PATH)
