@@ -495,66 +495,96 @@ def api_contacts_add():
 
     return jsonify({"ok": True, "present": present, "missing": missing})
 
-# helper: low-level sqlite connection (adjust if you already have db_conn())
-def _db_conn():
-    # make sure DB_PATH is defined in your module
-    return sqlite3.connect(DB_PATH, detect_types=sqlite3.PARSE_DECLTYPES)
+# ---------- Invite + Contacts helpers & endpoints (replace your existing block) ----------
+# Note: this block expects sqlite3, time, secrets, current_app and flask_session to be available
+# in your module (you previously imported them). It will prefer an existing db_conn()/_db_conn()
+# if present, otherwise fall back to using DB_PATH.
 
-# helper: ensure tables/columns exist (safe to call repeatedly)
+def _db_conn():
+    """Return a sqlite connection. Prefer existing helpers if available."""
+    # prefer existing helpers if present
+    if '_db_conn' in globals() and callable(globals()['_db_conn']) and globals()['_db_conn'] is not _db_conn:
+        return globals()['_db_conn']()
+    if 'db_conn' in globals() and callable(globals()['db_conn']):
+        return globals()['db_conn']()
+    # fallback to DB_PATH direct open
+    if 'DB_PATH' in globals():
+        return sqlite3.connect(DB_PATH, detect_types=sqlite3.PARSE_DECLTYPES)
+    raise RuntimeError("No db connection function found and DB_PATH not defined")
+
 def _ensure_invite_and_contacts_schema():
+    """Create minimal tables/columns we need. Safe to call repeatedly."""
     conn = _db_conn()
     cur = conn.cursor()
-    # invites table
+
+    # contact_invites table - single-use tokens
     cur.execute("""
       CREATE TABLE IF NOT EXISTS contact_invites (
          token TEXT PRIMARY KEY,
          inviter TEXT,
          phone TEXT,
-         created_at INTEGER
+         created_at INTEGER,
+         expires_at INTEGER
       );
     """)
-    # contacts table (owner -> contact relationship)
+
+    # canonical contacts table we will use in code
     cur.execute("""
       CREATE TABLE IF NOT EXISTS contacts (
-         owner TEXT,
-         contact TEXT,
+         id INTEGER PRIMARY KEY AUTOINCREMENT,
+         owner TEXT NOT NULL,
+         contact_name TEXT NOT NULL,
+         phone TEXT,
+         avatar TEXT,
          added_at INTEGER,
          source TEXT,
-         UNIQUE(owner, contact)
+         UNIQUE(owner, contact_name)
       );
     """)
-    # users.phone column - add if not present
-    cur.execute("PRAGMA table_info(users);")
-    cols = [r[1] for r in cur.fetchall()]
-    if 'phone' not in cols:
-        try:
-            cur.execute("ALTER TABLE users ADD COLUMN phone TEXT;")
-        except Exception:
-            # some older SQLite versions / complex schemas can't alter easily; ignore
-            pass
+
+    # best-effort: ensure users table has phone column (many schemas won't; sqlite allows simple ADD)
+    try:
+        cur.execute("PRAGMA table_info(users);")
+        cols = [r[1] for r in cur.fetchall()]
+        if 'phone' not in cols:
+            try:
+                cur.execute("ALTER TABLE users ADD COLUMN phone TEXT;")
+            except Exception:
+                # ignore if alter fails (complex schema/older sqlite)
+                pass
+    except Exception:
+        # users table might not exist yet; ignore
+        pass
+
     conn.commit()
     conn.close()
 
-# helper: load invite by token
+def normalize_phone(s):
+    if not s: return ''
+    return (s or '').replace(/[^0-9+]/g, '') if False else ''.join(ch for ch in (s or '') if ch.isdigit() or ch == '+')
+
 def load_contact_invite(token):
+    """Return invite dict or None."""
+    if not token: return None
     _ensure_invite_and_contacts_schema()
     conn = _db_conn()
     cur = conn.cursor()
-    cur.execute("SELECT token, inviter, phone, created_at FROM contact_invites WHERE token=?", (token,))
+    cur.execute("SELECT token, inviter, phone, created_at, expires_at FROM contact_invites WHERE token=?", (token,))
     row = cur.fetchone()
     conn.close()
-    if not row:
-        return None
-    return {'token': row[0], 'inviter': row[1], 'phone': row[2], 'created_at': row[3]}
+    if not row: return None
+    return {"token": row[0], "inviter": row[1], "phone": row[2], "created_at": row[3], "expires_at": row[4]}
 
-# helper: create invite token and store invite
-def create_contact_invite(inviter_username, phone=None):
+def create_contact_invite(inviter_username, phone=None, expires_secs=7*24*3600):
+    """Create a new invite token and store it."""
     _ensure_invite_and_contacts_schema()
     token = secrets.token_urlsafe(18)
+    now = int(time.time())
+    exp = now + expires_secs if expires_secs else None
     conn = _db_conn()
     cur = conn.cursor()
-    cur.execute("INSERT INTO contact_invites (token, inviter, phone, created_at) VALUES (?, ?, ?, ?)",
-                (token, inviter_username, phone or None, int(time.time())))
+    cur.execute("INSERT INTO contact_invites (token, inviter, phone, created_at, expires_at) VALUES (?, ?, ?, ?, ?)",
+                (token, inviter_username, phone or None, now, exp))
     conn.commit()
     conn.close()
     return token
@@ -563,15 +593,24 @@ def create_contact_invite(inviter_username, phone=None):
 @app.route('/api/create_contact_invite', methods=['POST'])
 def api_create_contact_invite():
     body = request.get_json(silent=True) or {}
-    # accept username from flask_session OR from body
-    username = flask_session.get('username') or body.get('username')
+    # accept username from flask_session or from body
+    username = None
+    try:
+        username = flask_session.get('username') if 'flask_session' in globals() else None
+    except Exception:
+        username = None
+    if not username:
+        username = body.get('username')
     if not username:
         return jsonify({"error": "not_logged_in"}), 401
 
     phone = body.get('phone')  # optional
-    token = create_contact_invite(username, phone=phone)
+    try:
+        token = create_contact_invite(username, phone=phone)
+    except Exception as e:
+        current_app.logger.exception("create_contact_invite failed: %s", e)
+        return jsonify({"error": "server_error"}), 500
 
-    # make invite URL (absolute). Use query param t= for easier JS parsing if you want.
     base = request.url_root.rstrip('/')
     invite_url = f"{base}/invite/{token}"
     return jsonify({"ok": True, "url": invite_url, "token": token})
@@ -585,12 +624,24 @@ def api_invite_info():
     inv = load_contact_invite(t)
     if not inv:
         return jsonify({"error": "invalid"}), 404
-    # try to get inviter display name from users table if present
-    conn = _db_conn(); cur = conn.cursor()
-    cur.execute("SELECT name, phone FROM users WHERE name = ? LIMIT 1", (inv['inviter'],))
-    row = cur.fetchone()
-    conn.close()
-    inviter_name = row[0] if row else inv['inviter']
+
+    inviter_name = inv.get('inviter')
+    # try to lookup nicer display name from users table (match by name OR phone if inviter was a phone)
+    try:
+        conn = _db_conn(); cur = conn.cursor()
+        # try match by name first
+        cur.execute("SELECT name, phone FROM users WHERE name = ? LIMIT 1", (inv.get('inviter'),))
+        row = cur.fetchone()
+        if not row and inv.get('inviter'):
+            # fallback: maybe inviter value is actually a phone
+            cur.execute("SELECT name, phone FROM users WHERE phone = ? LIMIT 1", (inv.get('inviter'),))
+            row = cur.fetchone()
+        conn.close()
+        if row and row[0]:
+            inviter_name = row[0]
+    except Exception:
+        current_app.logger.exception("invite_info lookup failed")
+
     return jsonify({"inviter_name": inviter_name, "phone": inv.get('phone')})
 
 # --- API: accept invite (JSON) — create user if needed and add mutual contacts ---
@@ -611,68 +662,110 @@ def api_accept_invite():
     inviter = inv['inviter']
 
     # Ensure schema
-    _ensure_invite_and_contacts_schema()
-
-    conn = _db_conn()
-    cur = conn.cursor()
-
-    # 1) Find or create user account (by phone) — phone should be unique
-    cur.execute("SELECT rowid, name FROM users WHERE phone = ? COLLATE NOCASE LIMIT 1", (phone,))
-    row = cur.fetchone()
-    if row:
-        new_user_name = row[1] or name
-    else:
-        # create a minimal user row. Adjust columns to your users table schema.
-        # Try to insert with name and phone, leave passwords blank or random if not used.
-        try:
-            cur.execute("INSERT INTO users (name, phone) VALUES (?, ?)", (name, phone))
-            conn.commit()
-        except Exception:
-            # if your users table has different required columns, try an alternative insert:
-            # find columns in users table and insert only allowable ones
-            pass
-        new_user_name = name
-
-    # 2) Add mutual contact rows into contacts table
-    ts = int(time.time())
     try:
-        cur.execute("INSERT INTO contacts (owner, contact_name, phone, avatar, added_at, source) VALUES (?, ?, ?, ?)",
-                    (inviter, new_user_name, ts, 'invite_sent'))
-        cur.execute("INSERT INTO contacts (owner, contact_name, phone, avatar, added_at, source) VALUES (?, ?, ?, ?)",
-                    (new_user_name, inviter, ts, 'invite_received'))
-        conn.commit()
-    except Exception as e:
-        current_app.logger.exception("contacts insert failed: %s", e)
-
-    # 3) Delete invite token (single-use)
-    try:
-        cur.execute("DELETE FROM contact_invites WHERE token=?", (token,))
-        conn.commit()
+        _ensure_invite_and_contacts_schema()
     except Exception:
-        pass
+        current_app.logger.exception("schema ensure failed")
 
-    conn.close()
-
-    # 4) Notify inviter in realtime (if you have socket mapping)
+    conn = None
     try:
-        # adapt to your socket API: we expect USER_SID to map username -> sid and socketio.emit available
-        sid = USER_SID.get(inviter)
-        if sid:
-            # if using Flask-SocketIO:
-            socketio.emit('contact_added_by_invite', {'inviter': inviter, 'new_name': new_user_name, 'new_phone': phone}, room=sid)
+        conn = _db_conn()
+        cur = conn.cursor()
+
+        # normalize phone simple
+        norm_phone = ''.join(ch for ch in phone if ch.isdigit() or ch == '+')
+
+        # 1) Find or create user account (by phone) — phone should be unique
+        cur.execute("PRAGMA table_info(users);")
+        user_cols = [r[1] for r in cur.fetchall()] if cur else []
+
+        row = None
+        if 'phone' in user_cols:
+            cur.execute("SELECT rowid, name FROM users WHERE phone = ? COLLATE NOCASE LIMIT 1", (norm_phone,))
+            row = cur.fetchone()
+        # fallback: try find by name if phone not present in schema or no match
+        if not row:
+            cur.execute("SELECT rowid, name FROM users WHERE name = ? LIMIT 1", (name,))
+            row = cur.fetchone()
+
+        if row:
+            new_user_name = row[1] or name
+        else:
+            # attempt to insert only columns that exist
+            insert_cols = []
+            insert_vals = []
+            if 'name' in user_cols:
+                insert_cols.append('name'); insert_vals.append(name)
+            if 'phone' in user_cols:
+                insert_cols.append('phone'); insert_vals.append(norm_phone)
+            if insert_cols:
+                q = "INSERT INTO users ({}) VALUES ({})".format(
+                    ",".join(insert_cols), ",".join("?"*len(insert_vals))
+                )
+                cur.execute(q, insert_vals)
+            else:
+                # if users table schema unknown or empty, try a forgiving insert (may fail)
+                try:
+                    cur.execute("INSERT INTO users (name, phone) VALUES (?, ?)", (name, norm_phone))
+                except Exception:
+                    # last resort: create a very simple users table (dangerous — only if you control DB)
+                    try:
+                        cur.execute("CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, name TEXT, phone TEXT)")
+                        cur.execute("INSERT INTO users (name, phone) VALUES (?, ?)", (name, norm_phone))
+                    except Exception:
+                        current_app.logger.exception("Unable to create/insert into users table")
+            conn.commit()
+            new_user_name = name
+
+        # 2) Add mutual contact rows into contacts table (use canonical columns)
+        ts = int(time.time())
+        try:
+            cur.execute("""
+                INSERT OR IGNORE INTO contacts (owner, contact_name, phone, avatar, added_at, source)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (inviter, new_user_name, norm_phone, None, ts, 'invite_sent'))
+
+            cur.execute("""
+                INSERT OR IGNORE INTO contacts (owner, contact_name, phone, avatar, added_at, source)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (new_user_name, inviter, None, None, ts, 'invite_received'))
+            # delete invite (single-use)
+            cur.execute("DELETE FROM contact_invites WHERE token = ?", (token,))
+            conn.commit()
+        except Exception as e:
+            conn.rollback()
+            current_app.logger.exception("contacts insert failed: %s", e)
+            return jsonify({"error": "server_error", "detail": str(e)}), 500
+
+    except Exception as e:
+        if conn:
+            conn.rollback()
+        current_app.logger.exception("accept_invite failed: %s", e)
+        return jsonify({"error": "server_error", "detail": str(e)}), 500
+    finally:
+        if conn:
+            conn.close()
+
+    # 3) Notify inviter realtime if possible
+    try:
+        sid = None
+        if 'USER_SID' in globals():
+            sid = USER_SID.get(inviter)
+        if sid and 'socketio' in globals():
+            socketio.emit('contact_added_by_invite', {'inviter': inviter, 'new_name': new_user_name, 'new_phone': norm_phone}, room=sid)
     except Exception:
         current_app.logger.exception("notify inviter failed")
 
     return jsonify({"success": True, "added": True, "new_user": new_user_name})
 
-# --- Invite landing page (GET returns styled HTML; form uses /api/accept_invite) ---
+# --- Invite landing page (GET returns styled HTML; form posts JSON to /api/accept_invite) ---
 @app.route('/invite/<token>', methods=['GET'])
 def invite_landing(token):
     inv = load_contact_invite(token)
     if not inv:
         return "Invalid or expired invite", 404
     prephone = inv.get('phone') or ''
-    # Render styled landing page — the form submits to /api/accept_invite (JSON)
+    # Render minimal, styled landing page (posts JSON to /api/accept_invite)
     return render_template_string("""
 <!doctype html>
 <html lang="en">
@@ -684,14 +777,14 @@ def invite_landing(token):
   <link href="https://fonts.googleapis.com/css2?family=Pacifico&family=Poppins:wght@400;600&display=swap" rel="stylesheet">
 </head>
 <body class="min-h-screen bg-gradient-to-b from-slate-50 to-indigo-50 flex flex-col items-center justify-center p-6">
-  <div class="bg-white/70 backdrop-blur-xl rounded-2xl shadow-2xl p-8 w-full max-w-md text-center">
+  <div class="bg-white/80 backdrop-blur rounded-2xl shadow p-8 w-full max-w-md text-center">
     <h1 class="text-3xl" style="font-family: 'Pacifico', cursive;">InfinityChatter</h1>
-    <p class="text-slate-600 mb-6">You’ve been invited to join a chat by <strong id="inviterName">{{ inviter }}</strong></p>
+    <p class="text-slate-600 mb-6">You've been invited by <strong id="inviterName">{{ inviter }}</strong></p>
 
     <form id="joinForm" class="flex flex-col gap-4" onsubmit="return false;">
-      <input id="name" type="text" placeholder="Your full name" required class="border rounded-xl px-4 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-400" />
-      <input id="phone" type="tel" placeholder="Your phone number" value="{{ phone }}" required class="border rounded-xl px-4 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-400" />
-      <button id="joinBtn" class="bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl py-2 transition-all shadow">Join InfinityChatter</button>
+      <input id="name" type="text" placeholder="Your full name" required class="border rounded-xl px-4 py-2" />
+      <input id="phone" type="tel" placeholder="Your phone number" value="{{ phone }}" required class="border rounded-xl px-4 py-2" />
+      <button id="joinBtn" class="bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl py-2">Join InfinityChatter</button>
     </form>
 
     <p id="statusMsg" class="text-sm text-slate-500 mt-4"></p>
@@ -701,32 +794,29 @@ def invite_landing(token):
 (function(){
   const token = "{{ token }}";
 
-  // optionally fetch inviter info to show nicer name (endpoint provided)
+  // show friendly inviter name if API can provide it
   fetch('/api/invite_info?t=' + encodeURIComponent(token)).then(r => r.json()).then(j => {
-    if (j && j.inviter_name) {
-      document.getElementById('inviterName').textContent = j.inviter_name;
-    }
+    if (j && j.inviter_name) document.getElementById('inviterName').textContent = j.inviter_name;
   }).catch(()=>{});
 
-  document.getElementById('joinBtn').addEventListener('click', async () => {
+  document.getElementById('joinBtn').addEventListener('click', async function(){
     const status = document.getElementById('statusMsg');
     const name = document.getElementById('name').value.trim();
     const phone = document.getElementById('phone').value.trim();
-    if (!name || !phone) { status.textContent = 'Please fill name and phone'; return; }
+    if (!name || !phone) { status.textContent = 'Please fill both fields'; return; }
 
     status.textContent = 'Joining…';
     try {
       const resp = await fetch('/api/accept_invite', {
         method: 'POST',
-        headers: {'Content-Type': 'application/json'},
+        headers: {'Content-Type':'application/json'},
         body: JSON.stringify({ token, name, phone })
       });
       const j = await resp.json();
       if (resp.ok && j && j.success) {
-        // Save a local profile (so new user is "logged in" locally)
         localStorage.setItem('infinity_profile', JSON.stringify({ name: name, phone: phone }));
-        status.textContent = '✅ Joined — redirecting...';
-        setTimeout(() => window.location.href = '/inbox', 900);
+        status.textContent = '✅ Joined — redirecting…';
+        setTimeout(()=> location.href = '/inbox', 900);
       } else {
         status.textContent = 'Error: ' + (j && j.error ? j.error : 'Unable to join');
       }
@@ -734,7 +824,6 @@ def invite_landing(token):
       status.textContent = 'Network error';
     }
   });
-
 })();
 </script>
 </body>
