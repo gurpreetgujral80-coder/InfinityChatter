@@ -14,7 +14,7 @@ import base64
 import requests
 from datetime import datetime
 from flask import (
-    Flask, render_template_string, request, jsonify, session, current_app,
+    Flask, render_template_string, request, jsonify, current_app, session as flask_session
     redirect, url_for, send_from_directory, abort, make_response, session,
 )
 from werkzeug.utils import secure_filename
