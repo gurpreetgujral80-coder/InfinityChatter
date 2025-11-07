@@ -24,26 +24,32 @@
   </style>
 </head>
 <body>
-  <div id="pageContent">
-    <header class="inbox-header">
-      <div style="width:100%;max-width:980px;text-align:center;">
-        <div style="font-weight:800;font-size:18px;">InfinityChatter</div>
-        <div style="font-size:0.9rem;color:#64748b;margin-top:2px;"><span id="myNameHeader"></span></div>
+  <header class="inbox-header">
+    <div style="width:100%;max-width:980px;text-align:center;position:relative;">
+      <div style="font-weight:800;font-size:18px;">InfinityChatter</div>
+      <div style="font-size:0.9rem;color:#64748b;margin-top:2px;">
+        <span id="myNameHeader"></span>
       </div>
-    </header>
+      <!-- small + button in top-right (will appear when Add box removed) -->
+      <button id="headerAddBtn" aria-label="Add contact" style="display:none;
+             position:absolute; right:12px; top:10px; width:38px; height:38px; border-radius:50%;
+             background:#0f172a; color:#fff; border:none; font-size:20px; cursor:pointer;">+</button>
+    </div>
+  </header>
   
+  <div id="pageContent" style="padding-top:84px; min-height:60vh;">
     <main class="inbox-main">
       <div id="contactsContainer">
         <div style="padding:18px;color:#64748b">Loading contacts…</div>
       </div>
     </main>
+  </div>
   
-    <div class="bottom-nav" role="navigation">
-      <div class="nav-item" id="nav-chats"><div>Chats</div></div>
-      <div class="nav-item" id="nav-calls"><div>Calls</div></div>
-      <div class="nav-item" id="nav-Updates"><div>Updates</div></div>
-      <div class="nav-item" id="nav-settings"><div>Settings</div></div>
-    </div>
+  <div class="bottom-nav" role="navigation" aria-label="main navigation">
+    <div class="nav-item" id="nav-chats" data-id="chats" data-path="/inbox"><div>Chats</div></div>
+    <div class="nav-item" id="nav-calls" data-id="calls" data-path="/calls"><div>Calls</div></div>
+    <div class="nav-item" id="nav-Updates" data-id="Updates" data-path="/updates"><div>Updates</div></div>
+    <div class="nav-item" id="nav-settings" data-id="settings" data-path="/settings"><div>Settings</div></div>
   </div>
 <script>
 (async function(){
