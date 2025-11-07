@@ -193,7 +193,7 @@ def save_push_sub():
     if not sub:
         return jsonify({"error": "missing subscription"}), 400
 
-    username = session.get("username")  # may be None
+    username = flask_session.get("username")  # may be None
     endpoint = sub.get("endpoint") if isinstance(sub, dict) else None
     now = int(time.time())
 
@@ -455,7 +455,7 @@ def send_web_push(subscription_info, payload_dict):
 # --- API: get contacts for logged in user ---
 @app.route('/api/contacts', methods=['GET'])
 def api_contacts():
-    username = session.get('username')
+    username = flask_session.get('username')
     if not username:
         return jsonify({"error": "not_logged_in"}), 401
     contacts = list_contacts_for(username)
@@ -464,7 +464,7 @@ def api_contacts():
 # --- API: add one or multiple contacts from client ---
 @app.route('/api/contacts_add', methods=['POST'])
 def api_contacts_add():
-    username = session.get('username')
+    username = flask_session.get('username')
     if not username:
         return jsonify({"error": "not_logged_in"}), 401
     body = request.get_json() or {}
@@ -563,7 +563,7 @@ def create_contact_invite(inviter_username, phone=None):
 @app.route('/api/create_contact_invite', methods=['POST'])
 def api_create_contact_invite():
     body = request.get_json(silent=True) or {}
-    # accept username from session OR from body
+    # accept username from flask_session OR from body
     username = flask_session.get('username') or body.get('username')
     if not username:
         return jsonify({"error": "not_logged_in"}), 401
