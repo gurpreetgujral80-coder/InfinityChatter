@@ -909,7 +909,7 @@ def handle_disconnect():
 
 @socketio.on('request_contacts_sync')
 def on_request_contacts_sync(data):
-    username = data.get('username') or session.get('username')
+    username = data.get('username') or flask_session.get('username')
     if not username: return
     contacts = list_contacts_for(username)
     emit('contacts_list', {'contacts': contacts})
@@ -1141,7 +1141,7 @@ def dicebear_avatar_url(style, seed, params):
 @app.route("/avatar_create")
 def avatar_create_page():
     # small page with controls to create and preview DiceBear avatars; will POST to /avatar_save
-    username = session.get('username')
+    username = flask_session.get('username')
     if not username:
         return redirect(url_for('index'))
     return render_template_string(AVATAR_CREATE_HTML, username=username)
@@ -1149,7 +1149,7 @@ def avatar_create_page():
 @app.route("/avatar_save", methods=["POST"])
 def avatar_save():
     # Save a DiceBear avatar (server fetch and cache) and update user's avatar path
-    username = session.get('username')
+    username = flask_session.get('username')
     if not username:
         return "not signed in", 401
     body = request.get_json() or {}
@@ -1224,8 +1224,8 @@ AUDIO_CALL_HTML = r"""
 
   <script src="https://cdn.jsdelivr.net/npm/socket.io-client@4.7.2/dist/socket.io.min.js"></script>
   <script>
-    // Template-provided username (available via Flask session) - Jinja will replace it.
-    const MYNAME = String({{ (session.get('username')|tojson) or '""' }}).replace(/^"|"$/g, '');
+    // Template-provided username (available via Flask flask_session) - Jinja will replace it.
+    const MYNAME = String({{ (flask_session.get('username')|tojson) or '""' }}).replace(/^"|"$/g, '');
 
     // Read parameters from URL: call_id, role (caller|callee), peer (the other username)
     const params = new URLSearchParams(location.search);
@@ -6632,14 +6632,14 @@ def index():
 
 @app.route("/profile_get")
 def profile_get():
-    username = session.get('username')
+    username = flask_session.get('username')
     if not username: return jsonify({"error":"not signed in"}), 401
     u = load_user_by_name(username)
     return jsonify({"name": u['name'], "status": u.get('status',''), "avatar": u.get('avatar')})
 
 @app.route("/profile_update", methods=["POST"])
 def profile_update():
-    username = session.get('username')
+    username = flask_session.get('username')
     if not username: return "not signed in", 401
     new_name = request.form.get('name', '').strip() or None
     status = request.form.get('status', None)
@@ -6661,7 +6661,7 @@ def profile_update():
     if status is not None:
         c.execute("UPDATE users SET status = ? WHERE name = ?", (status, username))
     conn.commit(); conn.close()
-    session['username'] = username
+    flask_session['username'] = username
     return jsonify({"status":"ok"})
 
 @app.route("/register", methods=["POST"])
@@ -6684,8 +6684,8 @@ def register():
     save_user(name, salt, hash_val, make_owner=True)
 
     # --- Step 3: Clear session and log them in immediately ---
-    session.clear()
-    session["username"] = name
+    flask_session.clear()
+    flask_session["username"] = name
     touch_user_presence(name)
 
     app.logger.info(f"First user registered: {name}")
@@ -6717,19 +6717,19 @@ def login():
     if not verify_pass(passkey, user['pass_salt'], user['pass_hash']):
         return "Unauthorized", 401
 
-    session.clear()
-    session['username'] = user['name']
+    flask_session.clear()
+    flask_session['username'] = user['name']
     touch_user_presence(user['name'])
     return jsonify({"status": "ok"})
 
 @app.route("/logout", methods=["POST"])
 def logout():
-    session.pop('username', None)
+    flask_session.pop('username', None)
     return redirect(url_for('index'))
 
 @app.route("/api/current_user")
 def api_current_user():
-    username = session.get("username")
+    username = flask_session.get("username")
     if not username:
         return jsonify({"logged_in": False}), 401
     user = load_user_by_name(username)
@@ -6741,7 +6741,7 @@ def api_current_user():
 
 @app.route("/chat")
 def chat():
-    username = session.get('username');
+    username = flask_session.get('username');
     if not username: return redirect(url_for('index'))
     user = load_user_by_name(username);
     if not user: return redirect(url_for('index'))
@@ -6759,7 +6759,7 @@ def send_composite_message():
     Returns the authoritative message object just like /send_message.
     """
     try:
-        username = session.get('username')
+        username = flask_session.get('username')
         if not username:
             return jsonify({"error": "not signed in"}), 401
 
@@ -6821,7 +6821,7 @@ def send_composite_message():
 
 @app.route('/contacts_list')
 def contacts_list_api():
-    username = session.get('username') or request.args.get('username')
+    username = flask_session.get('username') or request.args.get('username')
     if not username:
         return jsonify({'contacts': []})
 
@@ -6891,7 +6891,7 @@ def contacts_list_api():
 
 @app.route('/chat_temparory')
 def chat_temparory():
-    username = session.get('username');
+    username = flask_session.get('username');
     user = load_user_by_name(username);
     owner = get_owner(); partner = get_partner()
     is_owner = user.get("is_owner", False); is_partner = user.get("is_partner", False)
@@ -6910,7 +6910,7 @@ def poll_messages():
 def mark_seen():
     data = request.get_json(force=True)
     msg_id = data.get('messageId')
-    user = session.get('username') or 'anonymous'
+    user = flask_session.get('username') or 'anonymous'
     if not msg_id:
         return jsonify({'ok': False})
     # Example: add user to "seenBy"
@@ -6925,7 +6925,7 @@ def mark_seen():
 
 @app.route("/edit_message", methods=["POST"])
 def route_edit_message():
-    username = session.get('username');
+    username = flask_session.get('username');
     if not username: return "not signed in", 400
     body = request.get_json() or {}
     msg_id = body.get("id"); text = body.get("text","").strip()
@@ -6935,7 +6935,7 @@ def route_edit_message():
 
 @app.route("/delete_message", methods=["POST"])
 def route_delete_message():
-    username = session.get('username');
+    username = flask_session.get('username');
     if not username: return "not signed in", 400
     body = request.get_json() or {}
     msg_id = body.get("id")
@@ -6945,7 +6945,7 @@ def route_delete_message():
 
 @app.route("/react_message", methods=["POST"])
 def route_react_message():
-    username = session.get('username');
+    username = flask_session.get('username');
     if not username: return "not signed in", 400
     body = request.get_json() or {}
     msg_id = body.get("id"); emoji = body.get("emoji","❤️")
@@ -7206,8 +7206,8 @@ def send_message():
         text = (data.get('text') or "").strip()
         attachments = data.get('attachments') or []
 
-        # Prefer authenticated session username when available
-        sender = data.get('sender') or session.get('username') or data.get('from') or 'Unknown'
+        # Prefer authenticated flask_session username when available
+        sender = data.get('sender') or flask_session.get('username') or data.get('from') or 'Unknown'
 
         if not text and (not attachments or len(attachments) == 0):
             return jsonify({'error': 'Empty message'}), 400
