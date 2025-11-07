@@ -6910,37 +6910,45 @@ def send_composite_message():
 
 @app.route('/contacts_list')
 def contacts_list_api():
+    # lightweight local imports in case module-level names differ
+    from flask import jsonify, request, current_app, session as flask_session
+
     username = flask_session.get('username') or request.args.get('username')
     if not username:
         return jsonify({'contacts': []})
 
+    conn = None
     try:
         conn = sqlite3.connect(DB_PATH)
         cur = conn.cursor()
 
-        # --- Load from contacts table ---
+        contacts = []
+        seen = set()
+
+        # --- 1) Load from contacts table (explicitly added contacts / invites) ---
         cur.execute("""
             SELECT contact_name, phone, avatar, added_at
             FROM contacts
             WHERE owner = ?
             ORDER BY added_at DESC
         """, (username,))
-        contact_rows = cur.fetchall()
-        contacts = []
-        seen = set()
-
-        for r in contact_rows:
-            cname, phone, avatar, added_at = r
+        for cname, phone, avatar, added_at in cur.fetchall():
+            # choose canonical id: phone if available else contact_name
+            cid = (phone or cname or '').strip()
+            if not cid or cid in seen:
+                continue
             contacts.append({
-                'contact': cname,
-                'name': cname,
+                'contact': cid,
+                'name': cname or cid,
+                'phone': phone,
+                'avatar_url': avatar or f'/avatar/{(cname or cid)}',
                 'last_text': '',
                 'last_ts': int(added_at) if added_at else None,
-                'avatar_url': avatar or f'/avatar/{cname}'
+                'source': 'contacts'
             })
-            seen.add(cname)
+            seen.add(cid)
 
-        # --- Load from messages table ---
+        # --- 2) Merge in message-derived contacts (legacy chat list) ---
         cur.execute("""
             SELECT contact, last_text, last_ts FROM (
               SELECT
@@ -6957,26 +6965,32 @@ def contacts_list_api():
             ORDER BY t.last_ts DESC
         """, (username, username, username, username, username))
 
-        msg_rows = cur.fetchall()
-        for r in msg_rows:
-            cname = r[0]
-            if not cname or cname in seen:
+        for c, last_text, last_ts in cur.fetchall():
+            cid = (c or '').strip()
+            if not cid or cid in seen:
                 continue
             contacts.append({
-                'contact': cname,
-                'name': cname,
-                'last_text': r[1] or '',
-                'last_ts': int(r[2]) if r[2] else None,
-                'avatar_url': f'/avatar/{cname}'
+                'contact': cid,
+                'name': cid,
+                'phone': None,
+                'avatar_url': f'/avatar/{cid}',
+                'last_text': last_text or '',
+                'last_ts': int(last_ts) if last_ts else None,
+                'source': 'messages'
             })
-            seen.add(cname)
+            seen.add(cid)
 
-        conn.close()
+        # final sort (newest first). None -> 0
+        contacts.sort(key=lambda x: x.get('last_ts') or 0, reverse=True)
+
         return jsonify({'contacts': contacts})
 
-    except Exception:
-        current_app.logger.exception('contacts_list error')
+    except Exception as e:
+        current_app.logger.exception('contacts_list error: %s', e)
         return jsonify({'contacts': []})
+    finally:
+        if conn:
+            conn.close()
 
 @app.route('/chat_temparory')
 def chat_temparory():
