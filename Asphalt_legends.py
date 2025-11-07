@@ -587,7 +587,7 @@ def api_invite_info():
         return jsonify({"error": "invalid"}), 404
     # try to get inviter display name from users table if present
     conn = _db_conn(); cur = conn.cursor()
-    cur.execute("SELECT name, phone FROM users WHERE name = ? OR username = ? LIMIT 1", (inv['inviter'], inv['inviter']))
+    cur.execute("SELECT name, phone FROM users WHERE name = ? LIMIT 1", (inv['inviter'],))
     row = cur.fetchone()
     conn.close()
     inviter_name = row[0] if row else inv['inviter']
@@ -636,9 +636,9 @@ def api_accept_invite():
     # 2) Add mutual contact rows into contacts table
     ts = int(time.time())
     try:
-        cur.execute("INSERT OR IGNORE INTO contacts (owner, contact, added_at, source) VALUES (?, ?, ?, ?)",
+        cur.execute("INSERT INTO contacts (owner, contact_name, phone, avatar, added_at, source) VALUES (?, ?, ?, ?)",
                     (inviter, new_user_name, ts, 'invite_sent'))
-        cur.execute("INSERT OR IGNORE INTO contacts (owner, contact, added_at, source) VALUES (?, ?, ?, ?)",
+        cur.execute("INSERT INTO contacts (owner, contact_name, phone, avatar, added_at, source) VALUES (?, ?, ?, ?)",
                     (new_user_name, inviter, ts, 'invite_received'))
         conn.commit()
     except Exception as e:
@@ -6823,12 +6823,35 @@ def send_composite_message():
 def contacts_list_api():
     username = session.get('username') or request.args.get('username')
     if not username:
-        # not logged in → return empty list instead of demo users
         return jsonify({'contacts': []})
 
     try:
         conn = sqlite3.connect(DB_PATH)
         cur = conn.cursor()
+
+        # --- Load from contacts table ---
+        cur.execute("""
+            SELECT contact_name, phone, avatar, added_at
+            FROM contacts
+            WHERE owner = ?
+            ORDER BY added_at DESC
+        """, (username,))
+        contact_rows = cur.fetchall()
+        contacts = []
+        seen = set()
+
+        for r in contact_rows:
+            cname, phone, avatar, added_at = r
+            contacts.append({
+                'contact': cname,
+                'name': cname,
+                'last_text': '',
+                'last_ts': int(added_at) if added_at else None,
+                'avatar_url': avatar or f'/avatar/{cname}'
+            })
+            seen.add(cname)
+
+        # --- Load from messages table ---
         cur.execute("""
             SELECT contact, last_text, last_ts FROM (
               SELECT
@@ -6838,29 +6861,34 @@ def contacts_list_api():
               WHERE sender = ? OR recipient = ?
               GROUP BY contact
             ) AS t
-            JOIN messages m ON ( (m.sender = ? AND m.recipient = t.contact) OR (m.recipient = ? AND m.sender = t.contact) )
+            JOIN messages m ON (
+              (m.sender = ? AND m.recipient = t.contact)
+              OR (m.recipient = ? AND m.sender = t.contact)
+            )
             ORDER BY t.last_ts DESC
         """, (username, username, username, username, username))
-        rows = cur.fetchall()
-        contacts = []
-        seen = set()
-        for r in rows:
-            c = r[0]
-            if not c or c in seen:
+
+        msg_rows = cur.fetchall()
+        for r in msg_rows:
+            cname = r[0]
+            if not cname or cname in seen:
                 continue
             contacts.append({
-                'contact': c,
-                'name': c,
+                'contact': cname,
+                'name': cname,
                 'last_text': r[1] or '',
                 'last_ts': int(r[2]) if r[2] else None,
-                'avatar_url': f'/avatar/{c}'
+                'avatar_url': f'/avatar/{cname}'
             })
-            seen.add(c)
+            seen.add(cname)
+
         conn.close()
         return jsonify({'contacts': contacts})
+
     except Exception:
         current_app.logger.exception('contacts_list error')
         return jsonify({'contacts': []})
+
 @app.route('/chat_temparory')
 def chat_temparory():
     username = session.get('username');
