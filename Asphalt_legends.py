@@ -561,7 +561,7 @@ def _ensure_invite_and_contacts_schema():
 
 def normalize_phone(s):
     if not s: return ''
-    return (s or '').replace(/[^0-9+]/g, '') if False else ''.join(ch for ch in (s or '') if ch.isdigit() or ch == '+')
+    return ''.join(ch for ch in (s or '') if ch.isdigit() or ch == '+')
 
 def load_contact_invite(token):
     """Return invite dict or None."""
