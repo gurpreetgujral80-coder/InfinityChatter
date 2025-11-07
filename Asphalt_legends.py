@@ -660,8 +660,8 @@ def api_accept_invite():
         return jsonify({"error": "invalid_invite"}), 404
 
     inviter = inv['inviter']
+    norm_phone = ''.join(ch for ch in phone if ch.isdigit() or ch == '+')
 
-    # Ensure schema
     try:
         _ensure_invite_and_contacts_schema()
     except Exception:
@@ -672,70 +672,43 @@ def api_accept_invite():
         conn = _db_conn()
         cur = conn.cursor()
 
-        # normalize phone simple
-        norm_phone = ''.join(ch for ch in phone if ch.isdigit() or ch == '+')
-
-        # 1) Find or create user account (by phone) — phone should be unique
-        cur.execute("PRAGMA table_info(users);")
-        user_cols = [r[1] for r in cur.fetchall()] if cur else []
-
-        row = None
-        if 'phone' in user_cols:
-            cur.execute("SELECT rowid, name FROM users WHERE phone = ? COLLATE NOCASE LIMIT 1", (norm_phone,))
-            row = cur.fetchone()
-        # fallback: try find by name if phone not present in schema or no match
+        # --- ensure user exists ---
+        cur.execute("SELECT name FROM users WHERE phone = ? LIMIT 1", (norm_phone,))
+        row = cur.fetchone()
         if not row:
-            cur.execute("SELECT rowid, name FROM users WHERE name = ? LIMIT 1", (name,))
-            row = cur.fetchone()
+            cur.execute("INSERT INTO users (name, phone) VALUES (?, ?)", (name, norm_phone))
+        conn.commit()
 
-        if row:
-            new_user_name = row[1] or name
-        else:
-            # attempt to insert only columns that exist
-            insert_cols = []
-            insert_vals = []
-            if 'name' in user_cols:
-                insert_cols.append('name'); insert_vals.append(name)
-            if 'phone' in user_cols:
-                insert_cols.append('phone'); insert_vals.append(norm_phone)
-            if insert_cols:
-                q = "INSERT INTO users ({}) VALUES ({})".format(
-                    ",".join(insert_cols), ",".join("?"*len(insert_vals))
-                )
-                cur.execute(q, insert_vals)
-            else:
-                # if users table schema unknown or empty, try a forgiving insert (may fail)
-                try:
-                    cur.execute("INSERT INTO users (name, phone) VALUES (?, ?)", (name, norm_phone))
-                except Exception:
-                    # last resort: create a very simple users table (dangerous — only if you control DB)
-                    try:
-                        cur.execute("CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, name TEXT, phone TEXT)")
-                        cur.execute("INSERT INTO users (name, phone) VALUES (?, ?)", (name, norm_phone))
-                    except Exception:
-                        current_app.logger.exception("Unable to create/insert into users table")
-            conn.commit()
-            new_user_name = name
+        # --- ensure inviter also exists (safety) ---
+        cur.execute("SELECT name FROM users WHERE name = ? LIMIT 1", (inviter,))
+        if not cur.fetchone():
+            cur.execute("INSERT INTO users (name) VALUES (?)", (inviter,))
+        conn.commit()
 
-        # 2) Add mutual contact rows into contacts table (use canonical columns)
+        # --- add mutual contacts ---
         ts = int(time.time())
-        try:
-            cur.execute("""
-                INSERT OR IGNORE INTO contacts (owner, contact_name, phone, avatar, added_at, source)
-                VALUES (?, ?, ?, ?, ?, ?)
-            """, (inviter, new_user_name, norm_phone, None, ts, 'invite_sent'))
 
-            cur.execute("""
-                INSERT OR IGNORE INTO contacts (owner, contact_name, phone, avatar, added_at, source)
-                VALUES (?, ?, ?, ?, ?, ?)
-            """, (new_user_name, inviter, None, None, ts, 'invite_received'))
-            # delete invite (single-use)
-            cur.execute("DELETE FROM contact_invites WHERE token = ?", (token,))
-            conn.commit()
-        except Exception as e:
-            conn.rollback()
-            current_app.logger.exception("contacts insert failed: %s", e)
-            return jsonify({"error": "server_error", "detail": str(e)}), 500
+        # inviter gets the new user
+        cur.execute("""
+            INSERT OR IGNORE INTO contacts
+            (owner, contact_name, phone, avatar, added_at, source)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (inviter, name, norm_phone, None, ts, 'invite_sent'))
+
+        # new user gets inviter
+        # find inviter's phone (if available)
+        cur.execute("SELECT phone FROM users WHERE name = ? LIMIT 1", (inviter,))
+        inviter_phone = (cur.fetchone() or [None])[0]
+
+        cur.execute("""
+            INSERT OR IGNORE INTO contacts
+            (owner, contact_name, phone, avatar, added_at, source)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (name, inviter, inviter_phone, None, ts, 'invite_received'))
+
+        # delete invite (one-time)
+        cur.execute("DELETE FROM contact_invites WHERE token=?", (token,))
+        conn.commit()
 
     except Exception as e:
         if conn:
@@ -746,17 +719,20 @@ def api_accept_invite():
         if conn:
             conn.close()
 
-    # 3) Notify inviter realtime if possible
+    # --- notify inviter (if online) ---
     try:
-        sid = None
-        if 'USER_SID' in globals():
+        if 'USER_SID' in globals() and 'socketio' in globals():
             sid = USER_SID.get(inviter)
-        if sid and 'socketio' in globals():
-            socketio.emit('contact_added_by_invite', {'inviter': inviter, 'new_name': new_user_name, 'new_phone': norm_phone}, room=sid)
+            if sid:
+                socketio.emit('contact_added_by_invite', {
+                    'inviter': inviter,
+                    'new_name': name,
+                    'new_phone': norm_phone
+                }, room=sid)
     except Exception:
         current_app.logger.exception("notify inviter failed")
 
-    return jsonify({"success": True, "added": True, "new_user": new_user_name})
+    return jsonify({"success": True, "added": True, "new_user": name})
 
 # --- Invite landing page (GET returns styled HTML; form posts JSON to /api/accept_invite) ---
 @app.route('/invite/<token>', methods=['GET'])
