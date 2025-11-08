@@ -409,47 +409,59 @@
       header.appendChild(btn);
   }
 
-  function renderContacts(list){
-      const container = document.getElementById('contactsContainer');
-      container.innerHTML = '';
-    
-      const addBox = document.getElementById('addContactsBox');
-    
-      if(!list.length){
-        // No contacts → show Add Contacts box and remove header button if present
-        container.innerHTML = '<div style="padding:18px;color:#64748b">No contacts yet</div>';
-        if (addBox) addBox.style.display = 'flex';
-        const headerBtn = document.getElementById('headerAddBtn');
-        if (headerBtn) headerBtn.remove();
-        return;
-      }
-
-        // At least one contact → hide big Add box and add header button
-        if (addBox) addBox.style.display = 'none';
-        ensureHeaderAddButton();
-
-    
-      list.forEach(item=>{
-        const card = document.createElement('div');
-        card.className = 'contact-card';
-        card.innerHTML = `
-          <div class="contact-avatar">${ item.avatar_url ? '<img src="'+escapeHtml(item.avatar_url)+'" style="width:56px;height:56px;object-fit:cover;border-radius:8px;">' : escapeHtml((item.name||'')[0]||'?') }</div>
-          <div style="flex:1">
-            <div style="font-weight:700">${escapeHtml(item.name || item.contact)}</div>
-            <div style="color:#64748b;font-size:0.9rem;margin-top:6px">${escapeHtml(item.last_text||'')}</div>
+  function renderContacts(list) {
+    const container = document.getElementById('contactsContainer');
+    container.innerHTML = '';
+  
+    const addBox = document.getElementById('addContactsBox');
+  
+    if (!list.length) {
+      // No contacts → show Add Contacts box and remove header button if present
+      container.innerHTML = '<div style="padding:18px;color:#64748b">No contacts yet</div>';
+      if (addBox) addBox.style.display = 'flex';
+      const headerBtn = document.getElementById('headerAddBtn');
+      if (headerBtn) headerBtn.remove();
+      return;
+    }
+  
+    // At least one contact → hide big Add box and add header button
+    if (addBox) addBox.style.display = 'none';
+    ensureHeaderAddButton();
+  
+    list.forEach(item => {
+      const card = document.createElement('div');
+      card.className = 'contact-card';
+      card.innerHTML = `
+        <div class="contact-avatar">
+          ${item.avatar_url
+            ? '<img src="' + escapeHtml(item.avatar_url) + '" style="width:56px;height:56px;object-fit:cover;border-radius:8px;">'
+            : escapeHtml((item.name || '')[0] || '?')}
+        </div>
+        <div style="flex:1">
+          <div style="font-weight:700">${escapeHtml(item.name || item.contact)}</div>
+          <div style="color:#64748b;font-size:0.9rem;margin-top:6px">
+            ${escapeHtml(item.last_text || '')}
           </div>
-          <div style="color:#94a3b8;font-size:0.85rem">${item.last_ts?new Date(item.last_ts*1000).toLocaleString():''}</div>`;
-        // choose token first, else fallback to name/phone (encoded)
-        const profile = JSON.parse(localStorage.getItem('infinity_profile') || '{}');
-        
-        card.addEventListener('click', () => {
-          const peerToken = item.peer_token || item.contact;
-          const qs = new URLSearchParams();
-          qs.set('t', peerToken); // chat token or contact ID
-          if (profile && profile.name) qs.set('username', profile.name); // dev auto-login
-        
-          window.location.href = '/chat?' + qs.toString();
-        });
+        </div>
+        <div style="color:#94a3b8;font-size:0.85rem">
+          ${item.last_ts ? new Date(item.last_ts * 1000).toLocaleString() : ''}
+        </div>
+      `;
+  
+      const profile = JSON.parse(localStorage.getItem('infinity_profile') || '{}');
+  
+      card.addEventListener('click', () => {
+        const peerToken = item.peer_token || item.contact;
+        const qs = new URLSearchParams();
+        qs.set('t', peerToken); // chat token or contact ID
+        if (profile && profile.name) {
+          qs.set('username', profile.name); // dev auto-login for same laptop testing
+        }
+        window.location.href = '/chat?' + qs.toString();
+      });
+  
+      container.appendChild(card);
+    });
   }
 
   document.getElementById('nav-calls').addEventListener('click', ()=> window.location.href='/calls');
