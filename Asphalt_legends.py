@@ -592,13 +592,21 @@ def create_contact_invite(inviter_username, phone=None, expires_secs=7*24*3600):
 # --- API: create a share invite link for a phone (or general invite) ---
 @app.route('/api/create_contact_invite', methods=['POST'])
 def api_create_contact_invite():
+    # ✅ Ensure schema and DB consistency before doing anything
+    try:
+        _ensure_invite_and_contacts_schema()
+    except Exception:
+        current_app.logger.exception("Schema ensure failed in create_contact_invite")
+
     body = request.get_json(silent=True) or {}
+
     # accept username from flask_session or from body
     username = None
     try:
         username = flask_session.get('username') if 'flask_session' in globals() else None
     except Exception:
         username = None
+
     if not username:
         username = body.get('username')
     if not username:
@@ -609,7 +617,7 @@ def api_create_contact_invite():
         token = create_contact_invite(username, phone=phone)
     except Exception as e:
         current_app.logger.exception("create_contact_invite failed: %s", e)
-        return jsonify({"error": "server_error"}), 500
+        return jsonify({"error": "server_error", "detail": str(e)}), 500
 
     base = request.url_root.rstrip('/')
     invite_url = f"{base}/invite/{token}"
