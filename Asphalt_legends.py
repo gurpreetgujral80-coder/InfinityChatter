@@ -7442,6 +7442,16 @@ def debug_invites():
 def debug_db_path():
     return DB_PATH
 
+@app.route('/debug/invites_schema')
+def debug_invites_schema():
+    import sqlite3, json
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("PRAGMA table_info(contact_invites);")
+    cols = cur.fetchall()
+    conn.close()
+    return json.dumps(cols)
+
 # ----- run -----
 if __name__ == "__main__":
     print("DB:", DB_PATH)
