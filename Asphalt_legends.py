@@ -6886,14 +6886,15 @@ def send_composite_message():
 
 @app.route('/contacts_list')
 def contacts_list_api():
-    # local imports to avoid module-name mismatch when copied around
+    # local imports to avoid module-level mismatches
     from flask import jsonify, request, current_app, session as flask_session
     import sqlite3, time
 
-    username = flask_session.get('username') or request.args.get('username')
-    # return empty consistent shape if no username
+    username = (flask_session.get('username') or request.args.get('username') or '').strip()
     if not username:
         return jsonify({'contacts': [], 'debug': {'note': 'no username provided'}})
+
+    uname_norm = username.lower()
 
     conn = None
     debug = {}
@@ -6901,12 +6902,12 @@ def contacts_list_api():
         conn = sqlite3.connect(DB_PATH)
         cur = conn.cursor()
 
-        # debug: basic environment
         debug['db_path'] = DB_PATH
         debug['queried_username_raw'] = username
+        debug['queried_username_norm'] = uname_norm
         debug['time'] = int(time.time())
 
-        # debug: contacts table schema and total counts
+        # contacts table info + total
         try:
             cur.execute("PRAGMA table_info(contacts);")
             debug['contacts_table_info'] = cur.fetchall()
@@ -6919,50 +6920,24 @@ def contacts_list_api():
         except Exception as e:
             debug['contacts_total_count_error'] = str(e)
 
-        # 1) Show all rows in contacts table (capped)
+        # show sample of all rows (helpful)
         try:
             cur.execute("SELECT id, owner, contact_name, phone, avatar, added_at, source FROM contacts ORDER BY added_at DESC LIMIT 200;")
-            all_rows = cur.fetchall()
-            debug['contacts_all_sample'] = all_rows
+            debug['contacts_all_sample'] = cur.fetchall()
         except Exception as e:
             debug['contacts_all_sample_error'] = str(e)
-            all_rows = []
 
-        # 2) Show rows for this owner (exact match) and for a trimmed owner variant
-        try:
-            cur.execute("SELECT id, owner, contact_name, phone, avatar, added_at, source FROM contacts WHERE owner = ? ORDER BY added_at DESC", (username,))
-            owner_exact = cur.fetchall()
-            debug['owner_exact_count'] = len(owner_exact)
-            debug['owner_exact_sample'] = owner_exact
-        except Exception as e:
-            debug['owner_exact_error'] = str(e)
-            owner_exact = []
-
-        # trimmed and case-normalized checks
-        uname_trim = username.strip()
-        uname_lower = uname_trim.lower()
-        try:
-            cur.execute("SELECT id, owner, contact_name, phone, avatar, added_at, source FROM contacts")
-            rows = cur.fetchall()
-            debug['owner_match_candidates'] = [
-                r for r in rows
-                if ( (r[1] or '').strip() == uname_trim ) or ( (r[1] or '').strip().lower() == uname_lower )
-            ][:50]
-        except Exception as e:
-            debug['owner_match_candidates_error'] = str(e)
-
-        # Build the normal contacts list (same logic as production)
         contacts = []
         seen = set()
 
-        # load from contacts table (explicit)
+        # 1) Explicit contacts where LOWER(owner) matches
         try:
             cur.execute("""
                 SELECT contact_name, phone, avatar, added_at, source
                 FROM contacts
-                WHERE owner = ?
+                WHERE LOWER(owner) = ?
                 ORDER BY added_at DESC
-            """, (username,))
+            """, (uname_norm,))
             for cname, phone, avatar, added_at, source in cur.fetchall():
                 cid = (phone or cname or '').strip()
                 if not cid or cid in seen:
@@ -6980,7 +6955,7 @@ def contacts_list_api():
         except Exception as e:
             debug['contacts_table_query_error'] = str(e)
 
-        # Merge in messages-derived contacts (optional)
+        # 2) Message-derived contacts (if you have messages table)
         try:
             cur.execute("""
                 SELECT contact, MAX(timestamp) as last_ts, COALESCE(text,'') as last_text
@@ -7007,17 +6982,15 @@ def contacts_list_api():
                 })
                 seen.add(cid)
         except Exception as e:
-            # messages table might not exist — keep going
             debug['messages_merge_error'] = str(e)
 
-        # final sort by timestamp (newest first)
+        # final sort (newest first)
         contacts.sort(key=lambda it: it.get('last_ts') or 0, reverse=True)
 
         debug['returned_contacts_count'] = len(contacts)
         return jsonify({'contacts': contacts, 'debug': debug})
 
     except Exception as e:
-        # log and return debug info to help troubleshooting
         current_app.logger.exception('contacts_list error: %s', e)
         debug['exception'] = str(e)
         return jsonify({'contacts': [], 'debug': debug})
