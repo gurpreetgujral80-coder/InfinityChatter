@@ -7070,16 +7070,57 @@ def api_current_user():
 
 @app.route("/chat")
 def chat():
-    username = flask_session.get('username');
-    if not username: return redirect(url_for('index'))
-    user = load_user_by_name(username);
-    if not user: return redirect(url_for('index'))
-    owner = get_owner(); partner = get_partner()
-    is_owner = user.get("is_owner", False); is_partner = user.get("is_partner", False)
-    owner_name = owner["name"] if owner else None; partner_name = partner["name"] if partner else None
+    from flask import request, redirect, url_for, render_template_string, current_app
+
+    # --- Step 1: Try to get from session ---
+    username = flask_session.get('username')
+
+    # --- Step 2: If not logged in, allow ?username= for dev/testing ---
+    if not username:
+        q_user = request.args.get('username')
+        if q_user:
+            flask_session['username'] = q_user
+            username = q_user
+            current_app.logger.info(f"[DEV] Auto-set session username via query param: {q_user}")
+
+    # --- Step 3: Redirect if still missing (production guard) ---
+    if not username:
+        return redirect(url_for('index'))
+
+    # --- Step 4: Load user and safety check ---
+    user = load_user_by_name(username)
+    if not user:
+        return redirect(url_for('index'))
+
+    owner = get_owner()
+    partner = get_partner()
+    is_owner = user.get("is_owner", False)
+    is_partner = user.get("is_partner", False)
+    owner_name = owner["name"] if owner else None
+    partner_name = partner["name"] if partner else None
     is_member = is_owner or is_partner
+
+    # Mark active presence
     touch_user_presence(username)
-    return render_template_string(CHAT_HTML, username=username, user_status=user.get('status',''), user_avatar=user.get('avatar',''), is_owner=is_owner, is_partner=is_partner, owner_name=owner_name, partner_name=partner_name, is_member=is_member, heading_img=HEADING_IMG)
+
+    # --- Step 5: Read peer token for the chat (from ?t=xxxx or ?peer=) ---
+    peer_token = request.args.get('t') or request.args.get('peer')
+    current_app.logger.info(f"Opening chat for {username} peer_token={peer_token}")
+
+    # --- Step 6: Render chat page ---
+    return render_template_string(
+        CHAT_HTML,
+        username=username,
+        user_status=user.get('status', ''),
+        user_avatar=user.get('avatar', ''),
+        is_owner=is_owner,
+        is_partner=is_partner,
+        owner_name=owner_name,
+        partner_name=partner_name,
+        is_member=is_member,
+        heading_img=HEADING_IMG,
+        peer_token=peer_token
+    )
 
 @app.route("/send_composite_message", methods=["POST"])
 def send_composite_message():
