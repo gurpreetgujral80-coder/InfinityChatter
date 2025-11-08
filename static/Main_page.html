@@ -440,14 +440,16 @@
           </div>
           <div style="color:#94a3b8;font-size:0.85rem">${item.last_ts?new Date(item.last_ts*1000).toLocaleString():''}</div>`;
         // choose token first, else fallback to name/phone (encoded)
-        const token = item.peer_token || item.peer || item.contact || item.phone || item.name;
+        const profile = JSON.parse(localStorage.getItem('infinity_profile') || '{}');
+        
         card.addEventListener('click', () => {
-          if (!token) return;
-          // navigate to /chat?<token>  (no "peer=" key, per your request)
-          window.location.href = '/chat?' + encodeURIComponent(token);
+          const peerToken = item.peer_token || item.contact;
+          const qs = new URLSearchParams();
+          qs.set('t', peerToken); // chat token or contact ID
+          if (profile && profile.name) qs.set('username', profile.name); // dev auto-login
+        
+          window.location.href = '/chat?' + qs.toString();
         });
-        container.appendChild(card);
-      });
   }
 
   document.getElementById('nav-calls').addEventListener('click', ()=> window.location.href='/calls');
