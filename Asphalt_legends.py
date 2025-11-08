@@ -6886,11 +6886,13 @@ def send_composite_message():
 
 @app.route('/contacts_list')
 def contacts_list_api():
-    # lightweight local imports in case module-level names differ
+    # local imports so this function is robust when copied between modules
     from flask import jsonify, request, current_app, session as flask_session
+    import sqlite3
 
     username = flask_session.get('username') or request.args.get('username')
     if not username:
+        # not logged in → return empty array (UI expects this shape)
         return jsonify({'contacts': []})
 
     conn = None
@@ -6901,15 +6903,15 @@ def contacts_list_api():
         contacts = []
         seen = set()
 
-        # --- 1) Load from contacts table (explicitly added contacts / invites) ---
+        # 1) Load explicit contacts from contacts table (newest first)
         cur.execute("""
-            SELECT contact_name, phone, avatar, added_at
+            SELECT contact_name, phone, avatar, added_at, source
             FROM contacts
             WHERE owner = ?
             ORDER BY added_at DESC
         """, (username,))
-        for cname, phone, avatar, added_at in cur.fetchall():
-            # choose canonical id: phone if available else contact_name
+        for cname, phone, avatar, added_at, source in cur.fetchall():
+            # canonical id: prefer phone, fall back to contact_name
             cid = (phone or cname or '').strip()
             if not cid or cid in seen:
                 continue
@@ -6920,44 +6922,45 @@ def contacts_list_api():
                 'avatar_url': avatar or f'/avatar/{(cname or cid)}',
                 'last_text': '',
                 'last_ts': int(added_at) if added_at else None,
-                'source': 'contacts'
+                'source': source or 'contacts'
             })
             seen.add(cid)
 
-        # --- 2) Merge in message-derived contacts (legacy chat list) ---
-        cur.execute("""
-            SELECT contact, last_text, last_ts FROM (
-              SELECT
-                CASE WHEN sender = ? THEN recipient ELSE sender END AS contact,
-                MAX(timestamp) AS last_ts
-              FROM messages
-              WHERE sender = ? OR recipient = ?
-              GROUP BY contact
-            ) AS t
-            JOIN messages m ON (
-              (m.sender = ? AND m.recipient = t.contact)
-              OR (m.recipient = ? AND m.sender = t.contact)
-            )
-            ORDER BY t.last_ts DESC
-        """, (username, username, username, username, username))
+        # 2) Merge in message-derived contacts for chat history (if any)
+        #    This finds the most recent timestamp per peer and keeps contacts not already present.
+        try:
+            cur.execute("""
+                SELECT contact, MAX(ts) AS last_ts, last_text FROM (
+                  SELECT
+                    CASE WHEN sender = ? THEN recipient ELSE sender END AS contact,
+                    timestamp AS ts,
+                    COALESCE(text, '') AS last_text
+                  FROM messages
+                  WHERE sender = ? OR recipient = ?
+                )
+                GROUP BY contact
+                ORDER BY last_ts DESC
+            """, (username, username, username))
+            for c, last_ts, last_text in cur.fetchall():
+                cid = (c or '').strip()
+                if not cid or cid in seen:
+                    continue
+                contacts.append({
+                    'contact': cid,
+                    'name': cid,
+                    'phone': None,
+                    'avatar_url': f'/avatar/{cid}',
+                    'last_text': last_text or '',
+                    'last_ts': int(last_ts) if last_ts else None,
+                    'source': 'messages'
+                })
+                seen.add(cid)
+        except Exception:
+            # messages table might not exist or have different columns — ignore but log
+            current_app.logger.exception("message-derived contacts load failed")
 
-        for c, last_text, last_ts in cur.fetchall():
-            cid = (c or '').strip()
-            if not cid or cid in seen:
-                continue
-            contacts.append({
-                'contact': cid,
-                'name': cid,
-                'phone': None,
-                'avatar_url': f'/avatar/{cid}',
-                'last_text': last_text or '',
-                'last_ts': int(last_ts) if last_ts else None,
-                'source': 'messages'
-            })
-            seen.add(cid)
-
-        # final sort (newest first). None -> 0
-        contacts.sort(key=lambda x: x.get('last_ts') or 0, reverse=True)
+        # final sort by timestamp (most recent first). contacts with no ts go to the bottom.
+        contacts.sort(key=lambda it: it.get('last_ts') or 0, reverse=True)
 
         return jsonify({'contacts': contacts})
 
