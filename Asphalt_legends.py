@@ -6886,55 +6886,106 @@ def send_composite_message():
 
 @app.route('/contacts_list')
 def contacts_list_api():
-    # local imports so this function is robust when copied between modules
+    # local imports to avoid module-name mismatch when copied around
     from flask import jsonify, request, current_app, session as flask_session
-    import sqlite3
+    import sqlite3, time
 
     username = flask_session.get('username') or request.args.get('username')
+    # return empty consistent shape if no username
     if not username:
-        # not logged in → return empty array (UI expects this shape)
-        return jsonify({'contacts': []})
+        return jsonify({'contacts': [], 'debug': {'note': 'no username provided'}})
 
     conn = None
+    debug = {}
     try:
         conn = sqlite3.connect(DB_PATH)
         cur = conn.cursor()
 
+        # debug: basic environment
+        debug['db_path'] = DB_PATH
+        debug['queried_username_raw'] = username
+        debug['time'] = int(time.time())
+
+        # debug: contacts table schema and total counts
+        try:
+            cur.execute("PRAGMA table_info(contacts);")
+            debug['contacts_table_info'] = cur.fetchall()
+        except Exception as e:
+            debug['contacts_table_info_error'] = str(e)
+
+        try:
+            cur.execute("SELECT COUNT(*) FROM contacts;")
+            debug['contacts_total_count'] = cur.fetchone()[0]
+        except Exception as e:
+            debug['contacts_total_count_error'] = str(e)
+
+        # 1) Show all rows in contacts table (capped)
+        try:
+            cur.execute("SELECT id, owner, contact_name, phone, avatar, added_at, source FROM contacts ORDER BY added_at DESC LIMIT 200;")
+            all_rows = cur.fetchall()
+            debug['contacts_all_sample'] = all_rows
+        except Exception as e:
+            debug['contacts_all_sample_error'] = str(e)
+            all_rows = []
+
+        # 2) Show rows for this owner (exact match) and for a trimmed owner variant
+        try:
+            cur.execute("SELECT id, owner, contact_name, phone, avatar, added_at, source FROM contacts WHERE owner = ? ORDER BY added_at DESC", (username,))
+            owner_exact = cur.fetchall()
+            debug['owner_exact_count'] = len(owner_exact)
+            debug['owner_exact_sample'] = owner_exact
+        except Exception as e:
+            debug['owner_exact_error'] = str(e)
+            owner_exact = []
+
+        # trimmed and case-normalized checks
+        uname_trim = username.strip()
+        uname_lower = uname_trim.lower()
+        try:
+            cur.execute("SELECT id, owner, contact_name, phone, avatar, added_at, source FROM contacts")
+            rows = cur.fetchall()
+            debug['owner_match_candidates'] = [
+                r for r in rows
+                if ( (r[1] or '').strip() == uname_trim ) or ( (r[1] or '').strip().lower() == uname_lower )
+            ][:50]
+        except Exception as e:
+            debug['owner_match_candidates_error'] = str(e)
+
+        # Build the normal contacts list (same logic as production)
         contacts = []
         seen = set()
 
-        # 1) Load explicit contacts from contacts table (newest first)
-        cur.execute("""
-            SELECT contact_name, phone, avatar, added_at, source
-            FROM contacts
-            WHERE owner = ?
-            ORDER BY added_at DESC
-        """, (username,))
-        for cname, phone, avatar, added_at, source in cur.fetchall():
-            # canonical id: prefer phone, fall back to contact_name
-            cid = (phone or cname or '').strip()
-            if not cid or cid in seen:
-                continue
-            contacts.append({
-                'contact': cid,
-                'name': cname or cid,
-                'phone': phone,
-                'avatar_url': avatar or f'/avatar/{(cname or cid)}',
-                'last_text': '',
-                'last_ts': int(added_at) if added_at else None,
-                'source': source or 'contacts'
-            })
-            seen.add(cid)
-
-        # 2) Merge in message-derived contacts for chat history (if any)
-        #    This finds the most recent timestamp per peer and keeps contacts not already present.
+        # load from contacts table (explicit)
         try:
             cur.execute("""
-                SELECT contact, MAX(ts) AS last_ts, last_text FROM (
-                  SELECT
-                    CASE WHEN sender = ? THEN recipient ELSE sender END AS contact,
-                    timestamp AS ts,
-                    COALESCE(text, '') AS last_text
+                SELECT contact_name, phone, avatar, added_at, source
+                FROM contacts
+                WHERE owner = ?
+                ORDER BY added_at DESC
+            """, (username,))
+            for cname, phone, avatar, added_at, source in cur.fetchall():
+                cid = (phone or cname or '').strip()
+                if not cid or cid in seen:
+                    continue
+                contacts.append({
+                    'contact': cid,
+                    'name': cname or cid,
+                    'phone': phone,
+                    'avatar_url': avatar or f'/avatar/{(cname or cid)}',
+                    'last_text': '',
+                    'last_ts': int(added_at) if added_at else None,
+                    'source': source or 'contacts'
+                })
+                seen.add(cid)
+        except Exception as e:
+            debug['contacts_table_query_error'] = str(e)
+
+        # Merge in messages-derived contacts (optional)
+        try:
+            cur.execute("""
+                SELECT contact, MAX(timestamp) as last_ts, COALESCE(text,'') as last_text
+                FROM (
+                  SELECT CASE WHEN sender = ? THEN recipient ELSE sender END AS contact, timestamp, text
                   FROM messages
                   WHERE sender = ? OR recipient = ?
                 )
@@ -6955,18 +7006,21 @@ def contacts_list_api():
                     'source': 'messages'
                 })
                 seen.add(cid)
-        except Exception:
-            # messages table might not exist or have different columns — ignore but log
-            current_app.logger.exception("message-derived contacts load failed")
+        except Exception as e:
+            # messages table might not exist — keep going
+            debug['messages_merge_error'] = str(e)
 
-        # final sort by timestamp (most recent first). contacts with no ts go to the bottom.
+        # final sort by timestamp (newest first)
         contacts.sort(key=lambda it: it.get('last_ts') or 0, reverse=True)
 
-        return jsonify({'contacts': contacts})
+        debug['returned_contacts_count'] = len(contacts)
+        return jsonify({'contacts': contacts, 'debug': debug})
 
     except Exception as e:
+        # log and return debug info to help troubleshooting
         current_app.logger.exception('contacts_list error: %s', e)
-        return jsonify({'contacts': []})
+        debug['exception'] = str(e)
+        return jsonify({'contacts': [], 'debug': debug})
     finally:
         if conn:
             conn.close()
