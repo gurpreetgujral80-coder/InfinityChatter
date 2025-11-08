@@ -7408,6 +7408,10 @@ def debug_invites():
     conn.close()
     return json.dumps(rows)
 
+@app.route('/debug/db_path')
+def debug_db_path():
+    return DB_PATH
+
 # ----- run -----
 if __name__ == "__main__":
     print("DB:", DB_PATH)
