@@ -439,9 +439,12 @@
             <div style="color:#64748b;font-size:0.9rem;margin-top:6px">${escapeHtml(item.last_text||'')}</div>
           </div>
           <div style="color:#94a3b8;font-size:0.85rem">${item.last_ts?new Date(item.last_ts*1000).toLocaleString():''}</div>`;
-        const peer = item.name || item.contact_name || item.phone;
+        // choose token first, else fallback to name/phone (encoded)
+        const token = item.peer_token || item.peer || item.contact || item.phone || item.name;
         card.addEventListener('click', () => {
-          if (peer) window.location.href = '/chat?peer=' + encodeURIComponent(peer);
+          if (!token) return;
+          // navigate to /chat?<token>  (no "peer=" key, per your request)
+          window.location.href = '/chat?' + encodeURIComponent(token);
         });
         container.appendChild(card);
       });
