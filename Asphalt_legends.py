@@ -7398,6 +7398,16 @@ def debug_contacts_data():
     conn.close()
     return json.dumps(rows, indent=2)
 
+@app.route('/debug/invites')
+def debug_invites():
+    import sqlite3, json
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("SELECT token, inviter, phone, created_at, expires_at FROM contact_invites ORDER BY created_at DESC LIMIT 50;")
+    rows = cur.fetchall()
+    conn.close()
+    return json.dumps(rows)
+
 # ----- run -----
 if __name__ == "__main__":
     print("DB:", DB_PATH)
