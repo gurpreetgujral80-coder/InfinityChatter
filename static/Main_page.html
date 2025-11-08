@@ -316,6 +316,32 @@
   if(!profile.name){ window.location.href = '/login'; return; }
   document.getElementById('myNameHeader').textContent = profile.name || '';
 
+  const socket = window.socket || (window.cs && cs.socket);
+
+  if (socket && typeof socket.emit === 'function') {
+    // Register user when connected or on reconnect
+    if (socket.connected) {
+      socket.emit('register_socket', { username: profile.name });
+    } else {
+      socket.on('connect', () => socket.emit('register_socket', { username: profile.name }));
+    }
+  }
+
+  if (socket && typeof socket.on === 'function') {
+    socket.on('contact_added_by_invite', data => {
+      console.log("New contact added via invite:", data);
+      // Reload contact list dynamically
+      try { loadContacts(); } catch (e) { console.warn('loadContacts error', e); }
+
+      // Toast or alert
+      if (typeof showToast === 'function') {
+        showToast(`New contact added: ${data.new_name}`);
+      } else {
+        alert(`New contact added: ${data.new_name}`);
+      }
+    });
+  }
+  
   // helper escape
   function escapeHtml(s){ return (s||'').toString().replace(/[&<>"']/g, c=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 
@@ -665,15 +691,6 @@
   // Handle browser back button
   window.addEventListener('popstate', ()=> window.location.href = location.pathname);
 })();
-  
-const socket = window.socket || (window.cs && cs.socket);
-socket.on('contact_added_by_invite', data => {
-  console.log("New contact added via invite:", data);
-  // Reload contact list dynamically
-  loadContacts();
-  // Optionally: show a toast animation
-  showToast(`New contact added: ${data.new_name}`);
-});
 </script>
 </body>
 </html>
