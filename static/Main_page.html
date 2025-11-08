@@ -347,8 +347,15 @@
 
   async function loadContacts(){
     try {
-      const resp = await fetch('/contacts_list', { credentials: 'same-origin' });
-      if(!resp.ok) throw new Error('failed');
+      // prefer localStorage profile (works for your single-laptop tests)
+      const profile = JSON.parse(localStorage.getItem('infinity_profile') || '{}');
+      const username = (profile.name || profile.username || '').trim();
+  
+      // Build URL: include username query param if available (server will use session if not)
+      const url = username ? `/contacts_list?username=${encodeURIComponent(username)}` : '/contacts_list';
+  
+      const resp = await fetch(url, { credentials: 'same-origin' });
+      if (!resp.ok) throw new Error('failed: ' + resp.status);
       const data = await resp.json();
       renderContacts(data.contacts || []);
     } catch (err) {
@@ -356,6 +363,7 @@
       console.error('loadContacts', err);
     }
   }
+
   
   function ensureHeaderAddButton() {
       // check if the button already exists
