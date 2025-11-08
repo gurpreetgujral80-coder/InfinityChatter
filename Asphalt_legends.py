@@ -655,6 +655,9 @@ def api_invite_info():
 # --- API: accept invite (JSON) — create user if needed and add mutual contacts ---
 @app.route('/api/accept_invite', methods=['POST'])
 def api_accept_invite():
+    from flask import request, jsonify, current_app
+    import time
+
     data = request.get_json(silent=True) or {}
     token = data.get('token')
     name = (data.get('name') or '').strip()
@@ -667,56 +670,106 @@ def api_accept_invite():
     if not inv:
         return jsonify({"error": "invalid_invite"}), 404
 
-    inviter = inv['inviter']
+    inviter = inv['inviter'] or ''
+    # normalize phone (simple)
     norm_phone = ''.join(ch for ch in phone if ch.isdigit() or ch == '+')
 
+    # ensure schema exists
     try:
         _ensure_invite_and_contacts_schema()
     except Exception:
         current_app.logger.exception("schema ensure failed")
 
     conn = None
+    new_user_name = name
     try:
         conn = _db_conn()
         cur = conn.cursor()
 
-        # --- ensure user exists ---
-        cur.execute("SELECT name FROM users WHERE phone = ? LIMIT 1", (norm_phone,))
-        row = cur.fetchone()
-        if not row:
-            cur.execute("INSERT INTO users (name, phone) VALUES (?, ?)", (name, norm_phone))
-        conn.commit()
+        # --- 1) Ensure the new user exists (lookup by phone if possible) ---
+        try:
+            cur.execute("PRAGMA table_info(users);")
+            user_cols = [r[1] for r in cur.fetchall()]
+        except Exception:
+            user_cols = []
 
-        # --- ensure inviter also exists (safety) ---
-        cur.execute("SELECT name FROM users WHERE name = ? LIMIT 1", (inviter,))
-        if not cur.fetchone():
-            cur.execute("INSERT INTO users (name) VALUES (?)", (inviter,))
-        conn.commit()
+        row = None
+        if 'phone' in user_cols:
+            cur.execute("SELECT rowid, name FROM users WHERE phone = ? COLLATE NOCASE LIMIT 1", (norm_phone,))
+            row = cur.fetchone()
 
-        # --- add mutual contacts ---
+        if row:
+            new_user_name = row[1] or name
+        else:
+            # try to insert a minimal user row using allowed columns
+            insert_cols = []
+            insert_vals = []
+            if 'name' in user_cols:
+                insert_cols.append('name'); insert_vals.append(name)
+            if 'phone' in user_cols:
+                insert_cols.append('phone'); insert_vals.append(norm_phone)
+            if insert_cols:
+                q = "INSERT INTO users ({}) VALUES ({})".format(
+                    ",".join(insert_cols), ",".join("?" * len(insert_vals))
+                )
+                cur.execute(q, insert_vals)
+            else:
+                # fallback: try a forgiving insert (may fail if schema different)
+                try:
+                    cur.execute("INSERT INTO users (name, phone) VALUES (?, ?)", (name, norm_phone))
+                except Exception:
+                    # last-resort: create a minimal users table and insert
+                    try:
+                        cur.execute("CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, name TEXT, phone TEXT)")
+                        cur.execute("INSERT INTO users (name, phone) VALUES (?, ?)", (name, norm_phone))
+                    except Exception:
+                        current_app.logger.exception("Unable to create/insert into users table")
+
+            conn.commit()
+            new_user_name = name
+
+        # --- 2) Ensure inviter exists in users table (optional/safety) ---
+        try:
+            cur.execute("SELECT rowid FROM users WHERE name = ? LIMIT 1", (inviter,))
+            if not cur.fetchone():
+                # insert inviter minimally (name only) when missing
+                cur.execute("INSERT OR IGNORE INTO users (name) VALUES (?)", (inviter,))
+                conn.commit()
+        except Exception:
+            # ignore if users table schema prevents this
+            pass
+
+        # --- 3) Insert mutual contacts into contacts table ---
         ts = int(time.time())
+        try:
+            cur.execute("""
+                INSERT OR IGNORE INTO contacts
+                (owner, contact_name, phone, avatar, added_at, source)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (inviter, new_user_name, norm_phone, None, ts, 'invite_sent'))
 
-        # inviter gets the new user
-        cur.execute("""
-            INSERT OR IGNORE INTO contacts
-            (owner, contact_name, phone, avatar, added_at, source)
-            VALUES (?, ?, ?, ?, ?, ?)
-        """, (inviter, name, norm_phone, None, ts, 'invite_sent'))
+            # look up inviter phone if available for storing on the new user's side
+            inviter_phone = None
+            try:
+                cur.execute("SELECT phone FROM users WHERE name = ? LIMIT 1", (inviter,))
+                r = cur.fetchone()
+                inviter_phone = r[0] if r else None
+            except Exception:
+                inviter_phone = None
 
-        # new user gets inviter
-        # find inviter's phone (if available)
-        cur.execute("SELECT phone FROM users WHERE name = ? LIMIT 1", (inviter,))
-        inviter_phone = (cur.fetchone() or [None])[0]
+            cur.execute("""
+                INSERT OR IGNORE INTO contacts
+                (owner, contact_name, phone, avatar, added_at, source)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (new_user_name, inviter, inviter_phone, None, ts, 'invite_received'))
 
-        cur.execute("""
-            INSERT OR IGNORE INTO contacts
-            (owner, contact_name, phone, avatar, added_at, source)
-            VALUES (?, ?, ?, ?, ?, ?)
-        """, (name, inviter, inviter_phone, None, ts, 'invite_received'))
-
-        # delete invite (one-time)
-        cur.execute("DELETE FROM contact_invites WHERE token=?", (token,))
-        conn.commit()
+            # delete invite token (single-use)
+            cur.execute("DELETE FROM contact_invites WHERE token = ?", (token,))
+            conn.commit()
+        except Exception as e:
+            conn.rollback()
+            current_app.logger.exception("contacts insert failed: %s", e)
+            return jsonify({"error": "server_error", "detail": str(e)}), 500
 
     except Exception as e:
         if conn:
@@ -727,20 +780,28 @@ def api_accept_invite():
         if conn:
             conn.close()
 
-    # --- notify inviter (if online) ---
+    # --- 4) Realtime notify inviter and (if connected) the new user ---
     try:
+        payload = {'inviter': inviter, 'new_name': new_user_name, 'new_phone': norm_phone}
+        # if you map username -> sid in USER_SID:
         if 'USER_SID' in globals() and 'socketio' in globals():
-            sid = USER_SID.get(inviter)
-            if sid:
-                socketio.emit('contact_added_by_invite', {
-                    'inviter': inviter,
-                    'new_name': name,
-                    'new_phone': norm_phone
-                }, room=sid)
-    except Exception:
-        current_app.logger.exception("notify inviter failed")
+            try:
+                inviter_sid = USER_SID.get(inviter)
+                if inviter_sid:
+                    socketio.emit('contact_added_by_invite', payload, room=inviter_sid)
+            except Exception:
+                current_app.logger.exception("emit to inviter failed")
 
-    return jsonify({"success": True, "added": True, "new_user": name})
+            try:
+                new_sid = USER_SID.get(new_user_name)
+                if new_sid:
+                    socketio.emit('contact_added_by_invite', payload, room=new_sid)
+            except Exception:
+                current_app.logger.exception("emit to new user failed")
+    except Exception:
+        current_app.logger.exception("notify inviter/new user failed")
+
+    return jsonify({"success": True, "added": True, "new_user": new_user_name})
 
 # --- Invite landing page (GET returns styled HTML; form posts JSON to /api/accept_invite) ---
 @app.route('/invite/<token>', methods=['GET'])
@@ -957,28 +1018,90 @@ def react_message_db(msg_id, reactor, emoji):
     c.execute("UPDATE messages SET reactions = ? WHERE id = ?", (json.dumps(reactions), msg_id))
     conn.commit(); conn.close(); return True, None
 
-def emit_to_user(username, event, data):
-    sid = USER_SID.get(username)
-    if sid:
-        socketio.emit(event, data, to=sid)
+# --- Socket user registration and presence tracking ---
 
-@socketio.on('register_socket')  # call from client once on connect
-def handle_register(data):
-    username = data.get('username')
-    if username:
-        USER_SID[username] = request.sid
-        # Optionally join a room for user
-        join_room(username)
-        touch_user_presence(username)
+def emit_to_user(username, event, data):
+    """Emit a socket event directly to a specific user if connected."""
+    try:
+        sid = USER_SID.get(username)
+        if sid:
+            socketio.emit(event, data, to=sid)
+    except Exception as e:
+        current_app.logger.exception(f"emit_to_user({username}, {event}) failed: {e}")
+
+
+@socketio.on('register_socket')  # client should call this after connecting
+def handle_register_socket(data):
+    """Register the current socket connection with the provided username."""
+    try:
+        username = (data.get('username') if isinstance(data, dict) else str(data)).strip()
+        sid = request.sid
+
+        if not username:
+            socketio.emit('register_ack', {'ok': False, 'error': 'missing_username'}, to=sid)
+            return
+
+        # Save mapping
+        USER_SID[username] = sid
+
+        # Join user-specific room (optional)
+        try:
+            join_room(username)
+        except Exception:
+            pass
+
+        # Touch presence if function exists
+        try:
+            if 'touch_user_presence' in globals() and callable(globals()['touch_user_presence']):
+                touch_user_presence(username, online=True)
+        except Exception:
+            current_app.logger.exception("touch_user_presence failed on register")
+
+        # Acknowledge registration
+        socketio.emit('register_ack', {'ok': True, 'username': username}, to=sid)
+        current_app.logger.info(f"✅ Socket registered for user: {username}")
+
+    except Exception as e:
+        current_app.logger.exception(f"handle_register_socket failed: {e}")
+        try:
+            socketio.emit('register_ack', {'ok': False, 'error': 'server_error'}, to=request.sid)
+        except Exception:
+            pass
+
 
 @socketio.on('disconnect')
 def handle_disconnect():
-    # remove user from USER_SID if matches
-    sid = request.sid
-    for u,s in list(USER_SID.items()):
-        if s == sid:
-            USER_SID.pop(u, None)
-            break
+    """Cleanup socket mappings and presence on disconnect."""
+    try:
+        sid = request.sid
+        disconnected_user = None
+
+        # Remove user if SID matches
+        for username, stored_sid in list(USER_SID.items()):
+            if stored_sid == sid:
+                USER_SID.pop(username, None)
+                disconnected_user = username
+                break
+
+        # Leave room and mark offline
+        if disconnected_user:
+            try:
+                leave_room(disconnected_user)
+            except Exception:
+                pass
+
+            try:
+                if 'touch_user_presence' in globals() and callable(globals()['touch_user_presence']):
+                    touch_user_presence(disconnected_user, online=False)
+            except Exception:
+                current_app.logger.exception("touch_user_presence failed on disconnect")
+
+            current_app.logger.info(f"❌ User disconnected: {disconnected_user}")
+        else:
+            current_app.logger.debug(f"Socket disconnected (unmapped sid: {sid})")
+
+    except Exception as e:
+        current_app.logger.exception(f"handle_disconnect failed: {e}")
 
 @socketio.on('request_contacts_sync')
 def on_request_contacts_sync(data):
