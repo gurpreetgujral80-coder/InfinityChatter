@@ -666,6 +666,14 @@
   window.addEventListener('popstate', ()=> window.location.href = location.pathname);
 })();
 
+socket.on('contact_added_by_invite', data => {
+  console.log("New contact added via invite:", data);
+  // Reload contact list dynamically
+  loadContacts();
+  // Optionally: show a toast animation
+  showToast(`New contact added: ${data.new_name}`);
+});
+
 </script>
 </body>
 </html>
