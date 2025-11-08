@@ -330,25 +330,6 @@
       console.error('loadContacts', err);
     }
   }
-
-  if (socket && typeof socket.on === 'function') {
-    socket.on('contact_added_by_invite', data => {
-      console.log("New contact added via invite:", data);
-      // reload contact list UI
-      try { loadContacts(); } catch (e) { console.warn('loadContacts error', e); }
-
-      // show a toast — use your showToast if available, otherwise fallback to small DOM toast
-      if (typeof showToast === 'function') {
-        showToast(`New contact added: ${data.new_name}`);
-      } else {
-        const t = document.createElement('div');
-        t.textContent = `New contact: ${data.new_name}`;
-        t.style.cssText = 'position:fixed;right:16px;top:80px;background:#111;color:#fff;padding:8px 12px;border-radius:8px;z-index:2000;opacity:0.95;font-family:Arial,sans-serif;';
-        document.body.appendChild(t);
-        setTimeout(()=> t.remove(), 3200);
-      }
-    });
-  }
   
   function ensureHeaderAddButton() {
       // check if the button already exists
@@ -684,7 +665,14 @@
   // Handle browser back button
   window.addEventListener('popstate', ()=> window.location.href = location.pathname);
 })();
-
-</script>
+  
+const socket = window.socket || (window.cs && cs.socket);
+socket.on('contact_added_by_invite', data => {
+  console.log("New contact added via invite:", data);
+  // Reload contact list dynamically
+  loadContacts();
+  // Optionally: show a toast animation
+  showToast(`New contact added: ${data.new_name}`);
+});
 </body>
 </html>
