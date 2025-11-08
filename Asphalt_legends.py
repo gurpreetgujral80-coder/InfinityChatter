@@ -337,20 +337,76 @@ def get_partner():
     if r: return {"id": r[0], "name": r[1]}
     return None
 
+def _ensure_peer_token_column():
+    """Add peer_token column to contacts if missing."""
+    conn = _db_conn()
+    cur = conn.cursor()
+    cur.execute("PRAGMA table_info(contacts);")
+    cols = [r[1] for r in cur.fetchall()]
+    if 'peer_token' not in cols:
+        try:
+            cur.execute("ALTER TABLE contacts ADD COLUMN peer_token TEXT;")
+            conn.commit()
+        except Exception:
+            # If ALTER fails for any schema reason, ignore — app still works, but tokens won't be stored
+            pass
+    conn.close()
+
+def generate_peer_token():
+    """Return a 30-character alphanumeric token."""
+    # Use a URL-safe base and then strip non-alnum and truncate to 30
+    token = secrets.token_urlsafe(22)  # length ~ 29-30 chars base64-url
+    token = re.sub(r'[^A-Za-z0-9]', '', token)
+    # if token too short, extend deterministically
+    if len(token) < 30:
+        token += re.sub(r'[^A-Za-z0-9]', '', hashlib.sha256(token.encode()).hexdigest())
+    return token[:30]
+
 # ---------- Contacts helpers ----------
-def add_contact(owner, contact_name, phone, avatar=None, source='manual'):
-    """Insert a contact; normalize owner/contact_name/phone (trim)."""
+def add_contact(owner, contact_name, phone, avatar=None, source='manual', peer_token=None):
+    """
+    Insert a contact; normalize owner/contact_name/phone (trim).
+    If the contacts table has a peer_token column and peer_token is provided,
+    it will be saved. Uses INSERT OR IGNORE so duplicate owner/contact pairs are safe.
+    """
+    import time
+    now = int(time.time())
     owner = (owner or '').strip()
     contact_name = (contact_name or '').strip()
     phone = (phone or '').strip() or None
-    now = int(time.time())
-    conn = db_conn(); c = conn.cursor()
-    # Use INSERT OR IGNORE in case same pair already exists
-    c.execute(
-      "INSERT OR IGNORE INTO contacts (owner, contact_name, phone, avatar, added_at, source) VALUES (?, ?, ?, ?, ?, ?)",
-      (owner, contact_name, phone, avatar, now, source)
-    )
-    conn.commit(); conn.close()
+
+    conn = db_conn()
+    c = conn.cursor()
+
+    # detect whether peer_token column exists and add it if missing (best-effort)
+    try:
+        c.execute("PRAGMA table_info(contacts);")
+        cols = [r[1] for r in c.fetchall()]
+        if 'peer_token' not in cols:
+            try:
+                c.execute("ALTER TABLE contacts ADD COLUMN peer_token TEXT;")
+                conn.commit()
+                cols.append('peer_token')
+            except Exception:
+                # ignore alter errors (some sqlite schemas may not allow)
+                pass
+    except Exception:
+        cols = []
+
+    # Build query depending on whether peer_token column exists
+    if 'peer_token' in cols:
+        c.execute(
+            "INSERT OR IGNORE INTO contacts (owner, contact_name, phone, avatar, added_at, source, peer_token) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (owner, contact_name, phone, avatar, now, source, peer_token)
+        )
+    else:
+        c.execute(
+            "INSERT OR IGNORE INTO contacts (owner, contact_name, phone, avatar, added_at, source) VALUES (?, ?, ?, ?, ?, ?)",
+            (owner, contact_name, phone, avatar, now, source)
+        )
+
+    conn.commit()
+    conn.close()
     return True
 
 def list_contacts_for(owner):
@@ -666,10 +722,11 @@ def api_invite_info():
     return jsonify({"inviter_name": inviter_name, "phone": inv.get('phone')})
 
 # --- API: accept invite (JSON) — create user if needed and add mutual contacts ---
+# --- API: accept invite (JSON) — create user if needed and add mutual contacts ---
 @app.route('/api/accept_invite', methods=['POST'])
 def api_accept_invite():
     from flask import request, jsonify, current_app
-    import time
+    import time, secrets, re
 
     data = request.get_json(silent=True) or {}
     token = (data.get('token') or '').strip()
@@ -686,63 +743,142 @@ def api_accept_invite():
     inviter = (inv.get('inviter') or '').strip()
     norm_phone = ''.join(ch for ch in phone if ch.isdigit() or ch == '+')
 
-    # --- Step 1: Ensure schema exists ---
+    # Ensure basic invite/contacts schema (best-effort)
     try:
         _ensure_invite_and_contacts_schema()
     except Exception:
         current_app.logger.exception("schema ensure failed")
 
     conn = None
+    new_user_name = name
     try:
         conn = _db_conn()
         cur = conn.cursor()
 
-        # --- Step 2: Ensure new user exists ---
-        cur.execute("PRAGMA table_info(users);")
-        user_cols = [r[1] for r in cur.fetchall()] or []
+        # Ensure users table schema and try to find existing user by phone
+        try:
+            cur.execute("PRAGMA table_info(users);")
+            user_cols = [r[1] for r in cur.fetchall()]
+        except Exception:
+            user_cols = []
 
-        cur.execute("SELECT name FROM users WHERE phone = ? COLLATE NOCASE LIMIT 1", (norm_phone,))
-        existing = cur.fetchone()
-        if not existing:
-            try:
-                if 'phone' in user_cols and 'name' in user_cols:
-                    cur.execute("INSERT INTO users (name, phone) VALUES (?, ?)", (name, norm_phone))
-                elif 'name' in user_cols:
-                    cur.execute("INSERT INTO users (name) VALUES (?)", (name,))
-                conn.commit()
-            except Exception:
-                current_app.logger.exception("user insert failed for %s", name)
+        found = None
+        if 'phone' in user_cols:
+            cur.execute("SELECT rowid, name FROM users WHERE phone = ? COLLATE NOCASE LIMIT 1", (norm_phone,))
+            found = cur.fetchone()
+
+        if found:
+            new_user_name = found[1] or name
         else:
-            name = existing[0] or name
+            # Insert minimal user respecting available columns
+            insert_cols = []
+            insert_vals = []
+            if 'name' in user_cols:
+                insert_cols.append('name'); insert_vals.append(name)
+            if 'phone' in user_cols:
+                insert_cols.append('phone'); insert_vals.append(norm_phone)
 
-        # --- Step 3: Ensure inviter exists ---
-        cur.execute("SELECT 1 FROM users WHERE name = ? LIMIT 1", (inviter,))
-        if not cur.fetchone():
             try:
-                cur.execute("INSERT INTO users (name) VALUES (?)", (inviter,))
-                conn.commit()
+                if insert_cols:
+                    q = "INSERT INTO users ({}) VALUES ({})".format(",".join(insert_cols), ",".join("?"*len(insert_vals)))
+                    cur.execute(q, insert_vals)
+                else:
+                    # fallback: forgiving insert (may fail if schema is strict)
+                    cur.execute("INSERT INTO users (name, phone) VALUES (?, ?)", (name, norm_phone))
             except Exception:
-                pass
+                # last-resort: create tiny users table and insert (only if necessary)
+                try:
+                    cur.execute("CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, name TEXT, phone TEXT)")
+                    cur.execute("INSERT INTO users (name, phone) VALUES (?, ?)", (name, norm_phone))
+                except Exception:
+                    current_app.logger.exception("Unable to create/insert into users table")
+            conn.commit()
+            new_user_name = name
 
-        # --- Step 4: Get inviter’s phone (for reciprocal contact) ---
-        inviter_phone = None
+        # Ensure inviter exists in users table (safety)
         try:
-            cur.execute("SELECT phone FROM users WHERE name = ? LIMIT 1", (inviter,))
-            row = cur.fetchone()
-            inviter_phone = row[0] if row else None
+            cur.execute("SELECT 1 FROM users WHERE name = ? LIMIT 1", (inviter,))
+            if not cur.fetchone():
+                try:
+                    cur.execute("INSERT OR IGNORE INTO users (name) VALUES (?)", (inviter,))
+                    conn.commit()
+                except Exception:
+                    pass
         except Exception:
+            pass
+
+        # Ensure contacts table has peer_token column (add if missing)
+        try:
+            cur.execute("PRAGMA table_info(contacts);")
+            contact_cols = [r[1] for r in cur.fetchall()]
+            if 'peer_token' not in contact_cols:
+                try:
+                    cur.execute("ALTER TABLE contacts ADD COLUMN peer_token TEXT;")
+                    conn.commit()
+                    contact_cols.append('peer_token')
+                except Exception:
+                    # ignore if ALTER fails
+                    pass
+        except Exception:
+            contact_cols = []
+
+        # generate a shared peer_token (30 alnum chars)
+        raw = secrets.token_urlsafe(22)
+        peer_token = re.sub(r'[^A-Za-z0-9]', '', raw)
+        if len(peer_token) < 30:
+            # extend deterministically
+            import hashlib
+            peer_token += re.sub(r'[^A-Za-z0-9]', '', hashlib.sha256(peer_token.encode()).hexdigest())
+        peer_token = peer_token[:30]
+
+        ts = int(time.time())
+
+        # Insert mutual contacts: inviter -> new_user ; new_user -> inviter
+        try:
+            # inviter side
+            if 'peer_token' in contact_cols:
+                cur.execute("""
+                    INSERT OR IGNORE INTO contacts
+                    (owner, contact_name, phone, avatar, added_at, source, peer_token)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                """, (inviter, new_user_name, norm_phone, None, ts, 'invite_sent', peer_token))
+            else:
+                cur.execute("""
+                    INSERT OR IGNORE INTO contacts
+                    (owner, contact_name, phone, avatar, added_at, source)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                """, (inviter, new_user_name, norm_phone, None, ts, 'invite_sent'))
+
+            # lookup inviter phone if available
             inviter_phone = None
+            try:
+                cur.execute("SELECT phone FROM users WHERE name = ? LIMIT 1", (inviter,))
+                r = cur.fetchone()
+                inviter_phone = r[0] if r else None
+            except Exception:
+                inviter_phone = None
 
-        # --- Step 5: Insert mutual contacts via helper ---
-        try:
-            add_contact(inviter, name, norm_phone, source='invite_sent')
-            add_contact(name, inviter, inviter_phone, source='invite_received')
-        except Exception:
-            current_app.logger.exception("add_contact helper failed")
+            # new user side
+            if 'peer_token' in contact_cols:
+                cur.execute("""
+                    INSERT OR IGNORE INTO contacts
+                    (owner, contact_name, phone, avatar, added_at, source, peer_token)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                """, (new_user_name, inviter, inviter_phone, None, ts, 'invite_received', peer_token))
+            else:
+                cur.execute("""
+                    INSERT OR IGNORE INTO contacts
+                    (owner, contact_name, phone, avatar, added_at, source)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                """, (new_user_name, inviter, inviter_phone, None, ts, 'invite_received'))
 
-        # --- Step 6: Delete used invite token ---
-        cur.execute("DELETE FROM contact_invites WHERE token = ?", (token,))
-        conn.commit()
+            # delete invite token (single-use)
+            cur.execute("DELETE FROM contact_invites WHERE token = ?", (token,))
+            conn.commit()
+        except Exception as e:
+            conn.rollback()
+            current_app.logger.exception("contacts insert failed: %s", e)
+            return jsonify({"error": "server_error", "detail": str(e)}), 500
 
     except Exception as e:
         if conn:
@@ -753,22 +889,27 @@ def api_accept_invite():
         if conn:
             conn.close()
 
-    # --- Step 7: Notify both users (if online) ---
+    # Notify inviter and new user (if online) about new contact
     try:
-        payload = {'inviter': inviter, 'new_name': name, 'new_phone': norm_phone}
+        payload = {'inviter': inviter, 'new_name': new_user_name, 'new_phone': norm_phone, 'peer_token': peer_token}
         if 'USER_SID' in globals() and 'socketio' in globals():
-            # Notify inviter
-            inviter_sid = USER_SID.get(inviter)
-            if inviter_sid:
-                socketio.emit('contact_added_by_invite', payload, room=inviter_sid)
-            # Notify new user
-            new_sid = USER_SID.get(name)
-            if new_sid:
-                socketio.emit('contact_added_by_invite', payload, room=new_sid)
-    except Exception:
-        current_app.logger.exception("socket emit failed")
+            try:
+                inviter_sid = USER_SID.get(inviter)
+                if inviter_sid:
+                    socketio.emit('contact_added_by_invite', payload, room=inviter_sid)
+            except Exception:
+                current_app.logger.exception("emit to inviter failed")
 
-    return jsonify({"success": True, "added": True, "new_user": name})
+            try:
+                new_sid = USER_SID.get(new_user_name)
+                if new_sid:
+                    socketio.emit('contact_added_by_invite', payload, room=new_sid)
+            except Exception:
+                current_app.logger.exception("emit to new user failed")
+    except Exception:
+        current_app.logger.exception("notify inviter/new user failed")
+
+    return jsonify({"success": True, "added": True, "new_user": new_user_name, "peer_token": peer_token})
 
 # --- Invite landing page (GET returns styled HTML; form posts JSON to /api/accept_invite) ---
 @app.route('/invite/<token>', methods=['GET'])
@@ -2892,6 +3033,31 @@ socket.on('connect', () => {
 });
 socket.on('disconnect', () => console.log('⚠️ socket disconnected'));
 socket.on('connect_error', (err) => console.error('❌ socket connect_error', err));
+
+(async function() {
+  // token format: the raw query string if no key used
+  const raw = window.location.search.replace(/^\?/, '');
+  const token = raw || new URLSearchParams(window.location.search).get('t');
+
+  // if your server expects session, call the server to resolve the token
+  try {
+    const r = await fetch('/api/resolve_peer?t=' + encodeURIComponent(token), {credentials: 'same-origin'});
+    if (!r.ok) {
+      // handle error: maybe user not logged-in on server; if you use localStorage-profile,
+      // you can fallback to a client-side lookup (not recommended for security).
+      console.warn('resolve_peer failed', await r.text());
+      // fallback: try to treat token as name (if deterministic generation used)
+      // or redirect to /login
+    } else {
+      const j = await r.json();
+      const peer = j.peer;
+      // now load messages for peer, e.g. fetch('/messages?peer=' + encodeURIComponent(peer)) etc.
+      initChatForPeer(peer);
+    }
+  } catch (e) {
+    console.error(e);
+  }
+})();
 
 (function () {
   'use strict';
@@ -6982,6 +7148,43 @@ def send_composite_message():
         current_app.logger.exception("send_composite_message error")
         return jsonify({"error": str(e)}), 500
 
+@app.route('/api/resolve_peer')
+def api_resolve_peer():
+    from flask import request, session as flask_session, jsonify, current_app
+    token = request.args.get('t') or request.args.get('token') or (request.query_string.decode() if request.query_string else '')
+    if not token:
+        return jsonify({'error':'missing_token'}), 400
+
+    username = flask_session.get('username')
+    if not username:
+        # Not logged in on server — client may still have local profile, but server needs session
+        return jsonify({'error': 'not_logged_in'}), 401
+
+    try:
+        conn = _db_conn()
+        cur = conn.cursor()
+        # find contact row where token matches and user is owner or contact
+        cur.execute("""
+            SELECT owner, contact_name FROM contacts WHERE peer_token = ? LIMIT 1
+        """, (token,))
+        r = cur.fetchone()
+        conn.close()
+        if not r:
+            return jsonify({'error':'not_found'}), 404
+        owner, contact_name = r
+        # pick the other side as the peer
+        if owner == username:
+            peer = contact_name
+        elif contact_name == username:
+            peer = owner
+        else:
+            # token exists but not for this session; return owner/contact so client can handle access
+            peer = contact_name if contact_name != username else owner
+        return jsonify({'peer': peer, 'owner': owner, 'contact_name': contact_name})
+    except Exception as e:
+        current_app.logger.exception("resolve_peer failed: %s", e)
+        return jsonify({'error':'server_error'}), 500
+
 @app.route('/contacts_list')
 def contacts_list_api():
     from flask import jsonify, request, current_app, session as flask_session
@@ -7003,20 +7206,33 @@ def contacts_list_api():
         conn = sqlite3.connect(DB_PATH)
         cur = conn.cursor()
 
-        # Show DB path + basic info
         debug['db_path'] = DB_PATH
         debug['query_username'] = uname_trim
 
-        # 🔹 Load ALL contacts, then filter in Python (so case differences don’t break)
-        cur.execute("SELECT owner, contact_name, phone, avatar, added_at, source FROM contacts")
-        all_rows = cur.fetchall()
-        debug['total_contacts'] = len(all_rows)
+        # fetch contacts table info to see if peer_token column exists
+        try:
+            cur.execute("PRAGMA table_info(contacts);")
+            contact_cols_info = cur.fetchall()
+            contact_cols = [r[1] for r in contact_cols_info]
+            debug['contacts_table_info'] = contact_cols_info
+        except Exception as e:
+            contact_cols = []
+            debug['contacts_table_info_error'] = str(e)
 
-        for owner, cname, phone, avatar, added_at, source in all_rows:
+        # Pull all contacts for owner (case-insensitive match)
+        try:
+            cur.execute("SELECT owner, contact_name, phone, avatar, added_at, source, " +
+                        ("peer_token" if 'peer_token' in contact_cols else "'' as peer_token") +
+                        " FROM contacts")
+            all_rows = cur.fetchall()
+            debug['total_contacts'] = len(all_rows)
+        except Exception as e:
+            all_rows = []
+            debug['contacts_select_error'] = str(e)
+
+        for owner, cname, phone, avatar, added_at, source, peer_token in all_rows:
             if not owner:
                 continue
-
-            # Match if owner matches username (case-insensitive)
             if (owner.strip() == uname_trim) or (owner.strip().lower() == uname_lower):
                 cid = (phone or cname or '').strip()
                 if not cid or cid in seen:
@@ -7026,21 +7242,23 @@ def contacts_list_api():
                     'name': cname or cid,
                     'phone': phone,
                     'avatar_url': avatar or f'/avatar/{cname or cid}',
+                    'peer_token': peer_token or '',
                     'last_text': '',
                     'last_ts': int(added_at) if added_at else None,
                     'source': source or 'manual'
                 })
                 seen.add(cid)
 
-        # 🔹 Merge in any message-based contacts (optional)
+        # Merge message-based contacts (optional, non-fatal)
         try:
             cur.execute("""
                 SELECT
                   CASE WHEN sender = ? THEN recipient ELSE sender END AS contact,
-                  MAX(timestamp) AS last_ts
+                  MAX(timestamp) as last_ts
                 FROM messages
                 WHERE sender = ? OR recipient = ?
                 GROUP BY contact
+                ORDER BY last_ts DESC
             """, (uname_trim, uname_trim, uname_trim))
             for c, ts in cur.fetchall():
                 if not c or c in seen:
@@ -7050,6 +7268,7 @@ def contacts_list_api():
                     'name': c,
                     'phone': None,
                     'avatar_url': f'/avatar/{c}',
+                    'peer_token': '',
                     'last_text': '',
                     'last_ts': int(ts) if ts else None,
                     'source': 'messages'
@@ -7061,7 +7280,6 @@ def contacts_list_api():
         contacts.sort(key=lambda x: x.get('last_ts') or 0, reverse=True)
         debug['returned_contacts'] = len(contacts)
         return jsonify({'contacts': contacts, 'debug': debug})
-
     except Exception as e:
         current_app.logger.exception("contacts_list error: %s", e)
         return jsonify({'contacts': [], 'debug': {'exception': str(e)}})
@@ -7069,17 +7287,6 @@ def contacts_list_api():
         if conn:
             conn.close()
 
-@app.route('/chat_temparory')
-def chat_temparory():
-    username = flask_session.get('username');
-    user = load_user_by_name(username);
-    owner = get_owner(); partner = get_partner()
-    is_owner = user.get("is_owner", False); is_partner = user.get("is_partner", False)
-    owner_name = owner["name"] if owner else None; partner_name = partner["name"] if partner else None
-    is_member = is_owner or is_partner
-    touch_user_presence(username)
-    return render_template_string(CHAT_HTML, username=username, user_status=user.get('status',''), user_avatar=user.get('avatar',''), is_owner=is_owner, is_partner=is_partner, owner_name=owner_name, partner_name=partner_name, is_member=is_member, heading_img=HEADING_IMG)
-    
 @app.route('/poll_messages')
 def poll_messages():
     since = request.args.get('since', 0, type=int)
@@ -7477,52 +7684,7 @@ def poll_alias():
 
     msgs = fetch_messages(since)
     return jsonify(msgs)
-
-# --- Temporary debug: inspect contacts table structure ---
-@app.route('/debug/contacts_schema')
-def debug_contacts_schema():
-    import sqlite3, json
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-    cur.execute("PRAGMA table_info(contacts);")
-    cols = cur.fetchall()
-    conn.close()
-    return json.dumps(cols)
-
-@app.route('/debug/contacts_data')
-def debug_contacts_data():
-    import json, sqlite3
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-    cur.execute("SELECT owner, contact_name, phone, source FROM contacts ORDER BY added_at DESC")
-    rows = cur.fetchall()
-    conn.close()
-    return json.dumps(rows, indent=2)
-
-@app.route('/debug/invites')
-def debug_invites():
-    import sqlite3, json
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-    cur.execute("SELECT token, inviter, phone, created_at, expires_at FROM contact_invites ORDER BY created_at DESC LIMIT 50;")
-    rows = cur.fetchall()
-    conn.close()
-    return json.dumps(rows)
-
-@app.route('/debug/db_path')
-def debug_db_path():
-    return DB_PATH
-
-@app.route('/debug/invites_schema')
-def debug_invites_schema():
-    import sqlite3, json
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-    cur.execute("PRAGMA table_info(contact_invites);")
-    cols = cur.fetchall()
-    conn.close()
-    return json.dumps(cols)
-
+    
 # ----- run -----
 if __name__ == "__main__":
     print("DB:", DB_PATH)
