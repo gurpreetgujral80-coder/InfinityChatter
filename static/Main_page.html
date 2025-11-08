@@ -589,22 +589,6 @@
       }
     }, { once: true });
   }
-    
-    // attach & position
-    card.appendChild(menu);
-    card.querySelector('.contact-menu-btn')?.setAttribute('aria-expanded','true');
-  
-    // close on outside click
-    setTimeout(() => {
-      const onDocClick = (ev) => {
-        if (!menu.contains(ev.target) && !card.querySelector('.contact-menu-btn').contains(ev.target)) {
-          menu.remove();
-          document.removeEventListener('click', onDocClick);
-        }
-      };
-      document.addEventListener('click', onDocClick);
-    }, 10);
-  }
 
   document.getElementById('nav-calls').addEventListener('click', ()=> window.location.href='/calls');
   document.getElementById('nav-Updates').addEventListener('click', ()=> window.location.href='/Updates');
