@@ -63,7 +63,7 @@ app.config.update(
     SESSION_COOKIE_SECURE=True  # set to True in production (HTTPS)
 )
 PORT = int(os.environ.get("PORT", 5004))
-DB_PATH = os.path.join(os.path.dirname(__file__), "Asphalt_Legends.db")
+DB_PATH = os.path.join(os.path.dirname(__file__), "Asphalt_legends.db")
 HEADING_IMG = "/static/heading.png"  # place your heading image here
 MAX_MESSAGES = 100
 ALLOWED_IMAGE_EXT = {"png", "jpg", "jpeg", "gif", "webp", "svg"}
