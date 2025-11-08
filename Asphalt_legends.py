@@ -7017,59 +7017,40 @@ def send_composite_message():
 
 @app.route('/contacts_list')
 def contacts_list_api():
-    # local imports to avoid module-level mismatches
     from flask import jsonify, request, current_app, session as flask_session
     import sqlite3, time
 
-    username = (flask_session.get('username') or request.args.get('username') or '').strip()
+    username = flask_session.get('username') or request.args.get('username')
     if not username:
         return jsonify({'contacts': [], 'debug': {'note': 'no username provided'}})
 
-    uname_norm = username.lower()
+    uname_trim = username.strip()
+    uname_lower = uname_trim.lower()
 
     conn = None
     debug = {}
+    contacts = []
+    seen = set()
+
     try:
         conn = sqlite3.connect(DB_PATH)
         cur = conn.cursor()
 
+        # Show DB path + basic info
         debug['db_path'] = DB_PATH
-        debug['queried_username_raw'] = username
-        debug['queried_username_norm'] = uname_norm
-        debug['time'] = int(time.time())
+        debug['query_username'] = uname_trim
 
-        # contacts table info + total
-        try:
-            cur.execute("PRAGMA table_info(contacts);")
-            debug['contacts_table_info'] = cur.fetchall()
-        except Exception as e:
-            debug['contacts_table_info_error'] = str(e)
+        # 🔹 Load ALL contacts, then filter in Python (so case differences don’t break)
+        cur.execute("SELECT owner, contact_name, phone, avatar, added_at, source FROM contacts")
+        all_rows = cur.fetchall()
+        debug['total_contacts'] = len(all_rows)
 
-        try:
-            cur.execute("SELECT COUNT(*) FROM contacts;")
-            debug['contacts_total_count'] = cur.fetchone()[0]
-        except Exception as e:
-            debug['contacts_total_count_error'] = str(e)
+        for owner, cname, phone, avatar, added_at, source in all_rows:
+            if not owner:
+                continue
 
-        # show sample of all rows (helpful)
-        try:
-            cur.execute("SELECT id, owner, contact_name, phone, avatar, added_at, source FROM contacts ORDER BY added_at DESC LIMIT 200;")
-            debug['contacts_all_sample'] = cur.fetchall()
-        except Exception as e:
-            debug['contacts_all_sample_error'] = str(e)
-
-        contacts = []
-        seen = set()
-
-        # 1) Explicit contacts where LOWER(owner) matches
-        try:
-            cur.execute("""
-                SELECT contact_name, phone, avatar, added_at, source
-                FROM contacts
-                WHERE LOWER(owner) = ?
-                ORDER BY added_at DESC
-            """, (uname_norm,))
-            for cname, phone, avatar, added_at, source in cur.fetchall():
+            # Match if owner matches username (case-insensitive)
+            if (owner.strip() == uname_trim) or (owner.strip().lower() == uname_lower):
                 cid = (phone or cname or '').strip()
                 if not cid or cid in seen:
                     continue
@@ -7077,54 +7058,46 @@ def contacts_list_api():
                     'contact': cid,
                     'name': cname or cid,
                     'phone': phone,
-                    'avatar_url': avatar or f'/avatar/{(cname or cid)}',
+                    'avatar_url': avatar or f'/avatar/{cname or cid}',
                     'last_text': '',
                     'last_ts': int(added_at) if added_at else None,
-                    'source': source or 'contacts'
+                    'source': source or 'manual'
                 })
                 seen.add(cid)
-        except Exception as e:
-            debug['contacts_table_query_error'] = str(e)
 
-        # 2) Message-derived contacts (if you have messages table)
+        # 🔹 Merge in any message-based contacts (optional)
         try:
             cur.execute("""
-                SELECT contact, MAX(timestamp) as last_ts, COALESCE(text,'') as last_text
-                FROM (
-                  SELECT CASE WHEN sender = ? THEN recipient ELSE sender END AS contact, timestamp, text
-                  FROM messages
-                  WHERE sender = ? OR recipient = ?
-                )
+                SELECT
+                  CASE WHEN sender = ? THEN recipient ELSE sender END AS contact,
+                  MAX(timestamp) AS last_ts
+                FROM messages
+                WHERE sender = ? OR recipient = ?
                 GROUP BY contact
-                ORDER BY last_ts DESC
-            """, (username, username, username))
-            for c, last_ts, last_text in cur.fetchall():
-                cid = (c or '').strip()
-                if not cid or cid in seen:
+            """, (uname_trim, uname_trim, uname_trim))
+            for c, ts in cur.fetchall():
+                if not c or c in seen:
                     continue
                 contacts.append({
-                    'contact': cid,
-                    'name': cid,
+                    'contact': c,
+                    'name': c,
                     'phone': None,
-                    'avatar_url': f'/avatar/{cid}',
-                    'last_text': last_text or '',
-                    'last_ts': int(last_ts) if last_ts else None,
+                    'avatar_url': f'/avatar/{c}',
+                    'last_text': '',
+                    'last_ts': int(ts) if ts else None,
                     'source': 'messages'
                 })
-                seen.add(cid)
+                seen.add(c)
         except Exception as e:
             debug['messages_merge_error'] = str(e)
 
-        # final sort (newest first)
-        contacts.sort(key=lambda it: it.get('last_ts') or 0, reverse=True)
-
-        debug['returned_contacts_count'] = len(contacts)
+        contacts.sort(key=lambda x: x.get('last_ts') or 0, reverse=True)
+        debug['returned_contacts'] = len(contacts)
         return jsonify({'contacts': contacts, 'debug': debug})
 
     except Exception as e:
-        current_app.logger.exception('contacts_list error: %s', e)
-        debug['exception'] = str(e)
-        return jsonify({'contacts': [], 'debug': debug})
+        current_app.logger.exception("contacts_list error: %s", e)
+        return jsonify({'contacts': [], 'debug': {'exception': str(e)}})
     finally:
         if conn:
             conn.close()
