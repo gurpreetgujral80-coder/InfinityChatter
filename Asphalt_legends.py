@@ -7388,6 +7388,16 @@ def debug_contacts_schema():
     conn.close()
     return json.dumps(cols)
 
+@app.route('/debug/contacts_data')
+def debug_contacts_data():
+    import json, sqlite3
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("SELECT owner, contact_name, phone, source FROM contacts ORDER BY added_at DESC")
+    rows = cur.fetchall()
+    conn.close()
+    return json.dumps(rows, indent=2)
+
 # ----- run -----
 if __name__ == "__main__":
     print("DB:", DB_PATH)
