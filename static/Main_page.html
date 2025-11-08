@@ -51,6 +51,14 @@
   // Requires cs.socket or window.socket for socket.io if you use it
   const socket = window.socket || (window.cs && cs.socket);
 
+  socket.on('contact_added_by_invite', data => {
+    console.log("New contact added via invite:", data);
+    // Reload contact list dynamically
+    loadContacts();
+    // Optionally: show a toast animation
+    showToast(`New contact added: ${data.new_name}`);
+  });
+
   // create Add Contacts box (rounded rectangle)
   function createAddContactsButton() {
     const box = document.createElement('div');
@@ -665,14 +673,6 @@
   // Handle browser back button
   window.addEventListener('popstate', ()=> window.location.href = location.pathname);
 })();
-
-socket.on('contact_added_by_invite', data => {
-  console.log("New contact added via invite:", data);
-  // Reload contact list dynamically
-  loadContacts();
-  // Optionally: show a toast animation
-  showToast(`New contact added: ${data.new_name}`);
-});
 
 </script>
 </body>
