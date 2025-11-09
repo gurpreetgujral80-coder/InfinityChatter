@@ -654,7 +654,6 @@
     if (nameEl) nameEl.textContent = newName;
   }
   
-  // NEW renderContacts (adds classes to name/last and data-contact attr)
   function renderContacts(list) {
     const container = document.getElementById('contactsContainer');
     if (!container) return;
@@ -664,6 +663,7 @@
     const profile = JSON.parse(localStorage.getItem('infinity_profile') || '{}');
     const userLabel = profile.name || profile.username || 'You';
   
+    // Self chat always exists
     const selfContact = {
       name: `${userLabel} (You)`,
       contact: 'self',
@@ -673,10 +673,10 @@
     };
   
     list = Array.isArray(list) ? [...list] : [];
-  
     if (!list.some(c => (c.contact || '').toLowerCase() === 'self')) list.push(selfContact);
     list.sort((a, b) => (b.last_ts || 0) - (a.last_ts || 0));
   
+    // toggle add UI visibility
     if (list.length <= 1) {
       if (addBox) addBox.style.display = 'flex';
       removeHeaderAddButton();
@@ -685,13 +685,19 @@
       ensureHeaderAddButton();
     }
   
-    // ensure contactTokens map exists in localStorage (used elsewhere)
+    // guarantee token map exists
     let contactTokens = {};
-    try { contactTokens = JSON.parse(localStorage.getItem('contact_tokens') || '{}') || {}; } catch (e) { contactTokens = {}; }
+    try { contactTokens = JSON.parse(localStorage.getItem('contact_tokens') || '{}') || {}; } catch { contactTokens = {}; }
+  
+    // helper for random alphanumeric
+    const randAlnum = (len) => {
+      const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+      return Array.from({ length: len }, () => chars.charAt(Math.floor(Math.random() * chars.length))).join('');
+    };
   
     list.forEach(item => {
       const contactId = (item.contact || '').toString();
-      const localName = getLocalContactName(contactId);
+      const localName = getLocalContactName ? getLocalContactName(contactId) : null;
       const displayName = localName || item.name || contactId || 'Unknown';
       const lastText = item.last_text || '';
   
@@ -711,35 +717,32 @@
           <div class="contact-last" style="color:#64748b;font-size:0.9rem;margin-top:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(lastText)}</div>
         </div>
         <div style="display:flex;align-items:center;gap:8px">
-          <div style="color:#94a3b8;font-size:0.85rem;white-space:nowrap">${item.last_ts ? new Date(item.last_ts*1000).toLocaleString() : ''}</div>
-          <button class="contact-menu-btn" title="Options" aria-haspopup="true" aria-expanded="false" style="background:none;border:none;padding:6px;cursor:pointer">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <circle cx="12" cy="5" r="1"></circle><circle cx="12" cy="12" r="1"></circle><circle cx="12" cy="19" r="1"></circle>
+          <div style="color:#94a3b8;font-size:0.85rem;white-space:nowrap">${item.last_ts ? new Date(item.last_ts * 1000).toLocaleString() : ''}</div>
+          <button class="contact-menu-btn" title="Options" aria-haspopup="true" aria-expanded="false"
+            style="background:none;border:none;padding:6px;cursor:pointer">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+              stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="5" r="1"></circle>
+              <circle cx="12" cy="12" r="1"></circle>
+              <circle cx="12" cy="19" r="1"></circle>
             </svg>
           </button>
         </div>
       `;
   
-      // click to open chat (skip menu button clicks)
+      // CLICK to open chat (ignore menu clicks)
       card.addEventListener('click', (e) => {
-        if (e.target.closest('.contact-menu-btn')) return; // ignore 3-dot clicks
-      
+        if (e.target.closest('.contact-menu-btn')) return;
+  
         const profileLocal = JSON.parse(localStorage.getItem('infinity_profile') || '{}');
         const username = (profileLocal.username || profileLocal.name || 'you').toString();
         const contactId = (item.contact || '').toString();
         const peerRaw = item.peer_token || contactId;
         const isSelf = contactId === 'self' || peerRaw === 'self' || peerRaw === username;
-      
-        // helper to generate random alphanumeric string
-        const randAlnum = (len) => {
-          const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-          return Array.from({length: len}, () => chars.charAt(Math.floor(Math.random() * chars.length))).join('');
-        };
-      
+  
         let t = null;
-      
         if (isSelf) {
-          // self chat → unique token per user (never overlaps with others)
+          // Self chat token unique for each user, never reused
           let selfToken = localStorage.getItem('__self_chat_token');
           if (!selfToken) {
             selfToken = `__self_${username}_${randAlnum(12)}`;
@@ -747,10 +750,7 @@
           }
           t = selfToken;
         } else {
-          // normal contacts → stable 25-char per contact
-          let contactTokens = {};
-          try { contactTokens = JSON.parse(localStorage.getItem('contact_tokens') || '{}'); } catch { contactTokens = {}; }
-      
+          // Unique 25-char stable token per contact
           const key = contactId;
           if (contactTokens[key] && /^[A-Za-z0-9]{25}$/.test(contactTokens[key])) {
             t = contactTokens[key];
@@ -761,16 +761,28 @@
             t = newToken;
           }
         }
-      
-        // Open chat with unique token
+  
+        // Final redirect
         const qs = new URLSearchParams();
         qs.set('t', t);
         if (profileLocal && profileLocal.name) qs.set('username', profileLocal.name);
         console.log('→ Opening chat with token:', t);
         window.location.href = '/chat?' + qs.toString();
       });
-  }
   
+      // MENU BUTTON (placeholder)
+      const menuBtn = card.querySelector('.contact-menu-btn');
+      if (menuBtn) {
+        menuBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          toggleContactMenu(card, item);
+        });
+      }
+  
+      container.appendChild(card);
+    });
+  }
+
   // Close all existing popovers (body-level)
   function closeAllContactMenus() {
     document.querySelectorAll('.contact-popover').forEach(p => p.remove());
