@@ -722,54 +722,53 @@
   
       // click to open chat (skip menu button clicks)
       card.addEventListener('click', (e) => {
-        if (e.target.closest('.contact-menu-btn')) return;
-        // reuse your token logic (simplified: existing behavior)
+        if (e.target.closest('.contact-menu-btn')) return; // ignore 3-dot clicks
+      
         const profileLocal = JSON.parse(localStorage.getItem('infinity_profile') || '{}');
-        const username = (profileLocal.username || profileLocal.name || '').toString();
-        const peerRaw = item.peer_token || item.contact || '';
-        const isSelf = (item.contact === 'self') || (peerRaw === 'self') || (peerRaw === username);
-  
-        // token generation identical to previous logic:
+        const username = (profileLocal.username || profileLocal.name || 'you').toString();
+        const contactId = (item.contact || '').toString();
+        const peerRaw = item.peer_token || contactId;
+        const isSelf = contactId === 'self' || peerRaw === 'self' || peerRaw === username;
+      
+        // helper to generate random alphanumeric string
         const randAlnum = (len) => {
           const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-          let out = '';
-          for (let i=0;i<len;i++) out += chars.charAt(Math.floor(Math.random()*chars.length));
-          return out;
+          return Array.from({length: len}, () => chars.charAt(Math.floor(Math.random() * chars.length))).join('');
         };
-  
+      
         let t = null;
+      
         if (isSelf) {
-          let selfToken = localStorage.getItem('self_chat_token');
+          // self chat → unique token per user (never overlaps with others)
+          let selfToken = localStorage.getItem('__self_chat_token');
           if (!selfToken) {
-            selfToken = randAlnum(20) + 'self';
-            localStorage.setItem('self_chat_token', selfToken);
+            selfToken = `__self_${username}_${randAlnum(12)}`;
+            localStorage.setItem('__self_chat_token', selfToken);
           }
           t = selfToken;
         } else {
-          let ct = {};
-          try { ct = JSON.parse(localStorage.getItem('contact_tokens')||'{}'); } catch {}
-          const key = (item.contact || '').toString();
-          t = ct[key] || randAlnum(25);
-          ct[key] = t; localStorage.setItem('contact_tokens', JSON.stringify(ct));
+          // normal contacts → stable 25-char per contact
+          let contactTokens = {};
+          try { contactTokens = JSON.parse(localStorage.getItem('contact_tokens') || '{}'); } catch { contactTokens = {}; }
+      
+          const key = contactId;
+          if (contactTokens[key] && /^[A-Za-z0-9]{25}$/.test(contactTokens[key])) {
+            t = contactTokens[key];
+          } else {
+            const newToken = randAlnum(25);
+            contactTokens[key] = newToken;
+            localStorage.setItem('contact_tokens', JSON.stringify(contactTokens));
+            t = newToken;
+          }
         }
-  
-        const qs = new URLSearchParams(); qs.set('t', t);
+      
+        // Open chat with unique token
+        const qs = new URLSearchParams();
+        qs.set('t', t);
         if (profileLocal && profileLocal.name) qs.set('username', profileLocal.name);
+        console.log('→ Opening chat with token:', t);
         window.location.href = '/chat?' + qs.toString();
       });
-  
-      // menu button wiring
-      const menuBtn = card.querySelector('.contact-menu-btn');
-      if (menuBtn) {
-        menuBtn.addEventListener('click', (ev) => {
-          ev.stopPropagation();
-          // open popover; note: pass card and item
-          toggleContactMenu(menuBtn, card, item);
-        });
-      }
-  
-      container.appendChild(card);
-    });
   }
   
   // Close all existing popovers (body-level)
