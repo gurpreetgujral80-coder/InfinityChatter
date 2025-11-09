@@ -519,7 +519,7 @@
     list.sort((a, b) => (b.last_ts || 0) - (a.last_ts || 0));
     const addBox = document.getElementById('addContactsBox');
   
-    if (!list.length) {
+    if (list.length < 2) {
       container.innerHTML = '<div style="padding:18px;color:#64748b">No contacts yet</div>';
       if (addBox) addBox.style.display = 'flex';
       const headerBtn = document.getElementById('headerAddBtn');
