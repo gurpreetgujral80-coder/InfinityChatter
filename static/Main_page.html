@@ -732,37 +732,56 @@
   
       // CLICK to open chat (ignore menu clicks)
       card.addEventListener('click', (e) => {
-        if (e.target.closest('.contact-menu-btn')) return;
-  
+        if (e.target.closest && e.target.closest('.contact-menu-btn')) return; // ignore 3-dot clicks
+      
         const profileLocal = JSON.parse(localStorage.getItem('infinity_profile') || '{}');
-        const username = (profileLocal.username || profileLocal.name || 'you').toString();
+        const username = (profileLocal.username || profileLocal.name || '').toString();
         const contactId = (item.contact || '').toString();
         const peerRaw = item.peer_token || contactId;
         const isSelf = contactId === 'self' || peerRaw === 'self' || peerRaw === username;
-  
+      
+        // helper: generate random alphanumeric string
+        const randAlnum = (len) => {
+          const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+          let out = '';
+          for (let i = 0; i < len; i++) out += chars.charAt(Math.floor(Math.random() * chars.length));
+          return out;
+        };
+      
         let t = null;
+      
         if (isSelf) {
-          // Self chat token unique for each user, never reused
-          let selfToken = localStorage.getItem('__self_chat_token');
-          if (!selfToken) {
-            selfToken = `__self_${username}_${randAlnum(12)}`;
-            localStorage.setItem('__self_chat_token', selfToken);
+          // === SELF CHAT TOKEN (IMPORTANT) ===
+          // Must be exactly: 20 alphanumeric chars + 'self' (so total length = 24)
+          let selfToken = localStorage.getItem('self_chat_token');
+          if (!selfToken || !/^[A-Za-z0-9]{20}self$/.test(selfToken)) {
+            const code20 = randAlnum(20);
+            selfToken = code20 + 'self';
+            try { localStorage.setItem('self_chat_token', selfToken); } catch (err) { console.warn('ls set failed', err); }
           }
           t = selfToken;
         } else {
-          // Unique 25-char stable token per contact
-          const key = contactId;
+          // === NORMAL CONTACTS: stable 25-char alnum token per contact ===
+          let contactTokens = {};
+          try { contactTokens = JSON.parse(localStorage.getItem('contact_tokens') || '{}') || {}; } catch (e) { contactTokens = {}; }
+      
+          const key = contactId || (item.peer_token || '').toString() || ('c_' + randAlnum(6));
           if (contactTokens[key] && /^[A-Za-z0-9]{25}$/.test(contactTokens[key])) {
             t = contactTokens[key];
           } else {
-            const newToken = randAlnum(25);
-            contactTokens[key] = newToken;
-            localStorage.setItem('contact_tokens', JSON.stringify(contactTokens));
-            t = newToken;
+            const new25 = randAlnum(25);
+            contactTokens[key] = new25;
+            try { localStorage.setItem('contact_tokens', JSON.stringify(contactTokens)); } catch (err) { console.warn('ls set failed', err); }
+            t = new25;
           }
         }
-  
-        // Final redirect
+      
+        if (!t) {
+          console.warn('No token generated for contact', item);
+          return;
+        }
+      
+        // open chat with token format the chat page expects
         const qs = new URLSearchParams();
         qs.set('t', t);
         if (profileLocal && profileLocal.name) qs.set('username', profileLocal.name);
