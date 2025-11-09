@@ -650,45 +650,76 @@
       `;
 
       card.addEventListener('click', (e) => {
+        // defensive
         e.preventDefault?.();
         e.stopPropagation?.();
         if (typeof e.stopImmediatePropagation === 'function') e.stopImmediatePropagation();
       
-        // Ignore clicks on the 3-dot menu
+        // ignore menu button clicks
         if (e.target.closest && e.target.closest('.contact-menu-btn')) return;
       
         const profileLocal = JSON.parse(localStorage.getItem('infinity_profile') || '{}');
-        const username = profileLocal.username || profileLocal.name || 'You';
-        const peer = item.peer_token || item.contact;
+        const username = (profileLocal.username || profileLocal.name || '').toString();
       
-        // ✅ Detect self chat by multiple identifiers
-        const isSelf =
-          (item.contact === 'self') ||
-          (peer === 'self') ||
-          (peer === username) ||
-          (item.name?.includes('(You)')) ||
-          (!peer);
+        // helpers
+        const randAlnum = (len) => {
+          const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+          let out = '';
+          for (let i=0;i<len;i++) out += chars.charAt(Math.floor(Math.random()*chars.length));
+          return out;
+        };
+      
+        // load or initialize contact token map
+        let contactTokens = {};
+        try { contactTokens = JSON.parse(localStorage.getItem('contact_tokens') || '{}') || {}; } catch(e){ contactTokens = {}; }
+      
+        // compute token
+        let t = null;
+        const peerRaw = item.peer_token || item.contact || '';
+        const isSelf = (item.contact === 'self') || (peerRaw === 'self') || (peerRaw === username);
+      
+        if (isSelf) {
+          // self token: 20 alnum + "self"
+          let selfToken = localStorage.getItem('self_chat_token');
+          if (!selfToken) {
+            const code20 = randAlnum(20);
+            selfToken = code20 + 'self';
+            localStorage.setItem('self_chat_token', selfToken);
+          }
+          t = selfToken;
+        } else {
+          // non-self: prefer existing peer_token if it looks like a 25-char alnum token
+          if (peerRaw && /^[A-Za-z0-9]{25}$/.test(peerRaw)) {
+            t = peerRaw;
+          } else {
+            // check persisted mapping for this contact id (use contact string as key)
+            const key = (item.contact || '').toString();
+            if (key && contactTokens[key]) {
+              t = contactTokens[key];
+            } else {
+              // generate a new 25-char code and persist it
+              const new25 = randAlnum(25);
+              if (key) {
+                contactTokens[key] = new25;
+                try { localStorage.setItem('contact_tokens', JSON.stringify(contactTokens)); } catch(e){ /* ignore */ }
+              }
+              t = new25;
+            }
+          }
+        }
+      
+        if (!t) {
+          console.warn('No token generated for contact', item);
+          return; // avoid opening chat with empty token (prevents redirect to main page)
+        }
       
         const qs = new URLSearchParams();
-        qs.set('t', isSelf ? 'self' : peer);
-        if (profileLocal.name) qs.set('username', profileLocal.name);
+        qs.set('t', t);
+        if (profileLocal && profileLocal.name) qs.set('username', profileLocal.name);
       
-        const targetUrl = '/chat?' + qs.toString();
-        
-        window.location.href = targetUrl;
+        console.log('Navigating to chat with token:', t);
+        window.location.assign('/chat?' + qs.toString());
       });
-
-      // menu handling
-      const menuBtn = card.querySelector('.contact-menu-btn');
-      if (menuBtn) {
-        menuBtn.addEventListener('click', (e) => {
-          e.stopPropagation();
-          toggleContactMenu(menuBtn, card, item);
-        });
-      }
-
-      container.appendChild(card);
-    });
   }
 
   // expose renderContacts for debug/console
