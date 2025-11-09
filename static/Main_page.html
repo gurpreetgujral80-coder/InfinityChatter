@@ -650,33 +650,32 @@
       `;
 
       card.addEventListener('click', (e) => {
-        // stop any other handlers / default behavior
         e.preventDefault?.();
         e.stopPropagation?.();
         if (typeof e.stopImmediatePropagation === 'function') e.stopImmediatePropagation();
       
-        // ignore clicks on the menu button
+        // Ignore clicks on the 3-dot menu
         if (e.target.closest && e.target.closest('.contact-menu-btn')) return;
       
-        // compute peer / self
         const profileLocal = JSON.parse(localStorage.getItem('infinity_profile') || '{}');
-        const peerRaw = item.peer_token || item.contact || null;
-        const profileId = (profileLocal.username || profileLocal.name || '').toString();
-        const isSelf = (peerRaw === 'self') || (profileId && peerRaw === profileId);
+        const username = profileLocal.username || profileLocal.name || 'You';
+        const peer = item.peer_token || item.contact;
       
-        const t = isSelf ? 'self' : (peerRaw || null);
-        if (!t) {
-          console.warn('renderContacts: no peer token for contact', item);
-          // optional fallback: open empty chat page or show toast instead of redirect
-          return;
-        }
+        // ✅ Detect self chat by multiple identifiers
+        const isSelf =
+          (item.contact === 'self') ||
+          (peer === 'self') ||
+          (peer === username) ||
+          (item.name?.includes('(You)')) ||
+          (!peer);
       
         const qs = new URLSearchParams();
-        qs.set('t', t);
-        if (profileLocal && profileLocal.name) qs.set('username', profileLocal.name);
+        qs.set('t', isSelf ? 'self' : peer);
+        if (profileLocal.name) qs.set('username', profileLocal.name);
       
-        // use assign to navigate (clean)
-        window.location.assign('/chat?' + qs.toString());
+        const targetUrl = '/chat?' + qs.toString();
+        
+        window.location.href = targetUrl;
       });
 
       // menu handling
