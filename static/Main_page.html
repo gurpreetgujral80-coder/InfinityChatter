@@ -666,38 +666,48 @@
   
       // --- click: open chat ---
       card.addEventListener('click', (e) => {
-        e.preventDefault();
+        // Prevent multiple event triggers
         e.stopPropagation();
         if (e.target.closest('.contact-menu-btn')) return;
-  
+      
         const username = (profile.username || profile.name || '').toString();
         const peerRaw = item.peer_token || item.contact || '';
         const isSelf = (item.contact === 'self') || (peerRaw === 'self') || (peerRaw === username);
-  
-        let t;
+      
+        const randAlnum = (len) => {
+          const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+          let out = '';
+          for (let i = 0; i < len; i++) out += chars.charAt(Math.floor(Math.random() * chars.length));
+          return out;
+        };
+      
+        let t = null;
+      
         if (isSelf) {
-          let selfToken = localStorage.getItem('self_chat_token');
-          if (!selfToken) {
-            selfToken = randAlnum(20) + 'self';
-            localStorage.setItem('self_chat_token', selfToken);
+          // Use or create self chat token (20 chars + "self")
+          t = localStorage.getItem('self_chat_token');
+          if (!t) {
+            t = randAlnum(20) + 'self';
+            localStorage.setItem('self_chat_token', t);
           }
-          t = selfToken;
         } else {
-          if (peerRaw && /^[A-Za-z0-9]{25}$/.test(peerRaw)) {
-            t = peerRaw;
-          } else {
-            const key = (item.contact || '').toString();
-            t = contactTokens[key] || randAlnum(25);
-            contactTokens[key] = t;
-            localStorage.setItem('contact_tokens', JSON.stringify(contactTokens));
-          }
+          // normal chat token logic
+          let contactTokens = {};
+          try { contactTokens = JSON.parse(localStorage.getItem('contact_tokens') || '{}'); } catch {}
+          const key = (item.contact || '').toString();
+          t = contactTokens[key] || randAlnum(25);
+          contactTokens[key] = t;
+          localStorage.setItem('contact_tokens', JSON.stringify(contactTokens));
         }
-  
-        const qs = new URLSearchParams();
-        qs.set('t', t);
-        if (profile.name) qs.set('username', profile.name);
+      
+        if (!t) return console.warn('No chat token found.');
+      
+        const qs = new URLSearchParams({ t, username: profile.name || '' });
+      
+        // ✅ Use `location.href` (not assign) to fully navigate to chat page
+        // Avoids infinite reload or fallback to inbox
         console.log('→ opening chat', t);
-        window.location.assign('/chat?' + qs.toString());
+        window.location.href = '/chat?' + qs.toString();
       });
   
       // --- 3-dot popover menu ---
