@@ -45,351 +45,360 @@
     <div class="nav-item" id="nav-settings" data-id="settings" data-path="/settings"><div>Settings</div></div>
   </div>
 <script>
-(function(){
-  // --- Configuration ---
-  const mainSelector = '#pageContent'; // page content wrapper expected on pages
-  const routeMap = { chats: '/inbox', calls: '/calls', Updates: '/Updates', settings: '/settings' };
-  const tabOrder = ['chats','calls','Updates','settings'];
-
-  // --- Utilities ---
-  function escapeHtml(s){ return (s||'').toString().replace(/[&<>"']/g, c=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
-  function normalizePhone(s){ if(!s) return ''; return (s+'').replace(/[^0-9+]/g,''); }
-
-  window.__infinity = window.__infinity || {};
-
-  // --- Header + bottom nav (installed on every page) ---
-  function installHeaderAndNav(){
+// === InfinityChatter: exact header UI + iOS nav style + corrected nav routing ===
+(function() {
+  // ---- helpers ----
+  function loadFontsOnce() {
     if (!document.querySelector('link[href*="Pacifico"]')) {
-      const fonts = document.createElement('link'); fonts.href = 'https://fonts.googleapis.com/css2?family=Pacifico&family=Poppins:wght@400;600&display=swap'; fonts.rel='stylesheet'; document.head.appendChild(fonts);
-    }
-    if (!document.querySelector('script[src*="lucide"]')) {
-      const s = document.createElement('script'); s.src = 'https://unpkg.com/lucide@0.395.0/dist/umd/lucide.min.js'; s.async=true; document.head.appendChild(s);
-    }
-
-    document.querySelectorAll('header').forEach(e=>e.remove());
-    const header = document.createElement('header');
-    header.style.cssText = 'width:100%;background:#fff;padding:14px 20px 10px;position:fixed;top:0;left:0;z-index:1000;box-shadow:0 1px 10px rgba(0,0,0,0.05);display:flex;flex-direction:column;align-items:flex-start;';
-    header.innerHTML = `<div style="font-family:'Pacifico',cursive;font-size:32px;color:#0f172a;line-height:1;">InfinityChatter</div><div id="subLabel" style="font-family:'Poppins',sans-serif;font-size:15px;color:#475569;margin-top:3px;">Chats</div>`;
-    document.body.prepend(header);
-
-    // bottom nav
-    let nav = document.querySelector('.bottom-nav');
-    if (!nav) { nav = document.createElement('div'); nav.className = 'bottom-nav'; document.body.appendChild(nav); }
-    nav.classList.add('ios-bottom-nav');
-    nav.style.cssText = 'position:fixed;bottom:20px;left:50%;transform:translateX(-50%);width:92%;max-width:480px;background:rgba(255,255,255,0.55);backdrop-filter:blur(30px) saturate(180%);border:1px solid rgba(255,255,255,0.4);border-radius:40px;box-shadow:0 10px 25px rgba(0,0,0,0.12);display:flex;justify-content:space-around;align-items:center;padding:10px 0;font-family:Poppins,sans-serif;z-index:1000;';
-
-    const tabs = [
-      { id: "chats", icon: "message-circle", label: "Chats" },
-      { id: "calls", icon: "phone", label: "Calls" },
-      { id: "Updates", icon: "user", label: "Updates" },
-      { id: "settings", icon: "settings", label: "Settings" }
-    ];
-
-    // build nav items fresh (idempotent)
-    nav.innerHTML = '';
-    tabs.forEach(t=>{
-      const item = document.createElement('div');
-      item.className = 'nav-item';
-      item.dataset.id = t.id;
-      item.style.cssText = 'text-align:center;cursor:pointer;transition:transform .16s;flex:1;';
-      item.innerHTML = `<i data-lucide="${t.icon}" style="width:24px;height:24px;stroke:#0f172a"></i><div style="font-size:12px;margin-top:-2px;color:#0f172a">${t.label}</div>`;
-      nav.appendChild(item);
-    });
-
-    // init icons if lucide is already loaded shortly after install
-    setTimeout(()=>{ if(window.lucide && lucide.createIcons) lucide.createIcons(); }, 300);
-  }
-
-  // --- Add Contacts UI & modal (ONLY used on inbox/main) ---
-  function createAddContactsButton(){
-    const box = document.createElement('div'); box.id = 'addContactsBox';
-    box.style.cssText = 'width:calc(100% - 40px);max-width:480px;margin:18px auto;padding:14px 16px;border-radius:12px;box-shadow:0 4px 20px rgba(15,27,43,0.06);background:linear-gradient(180deg,#fff,#fbfdff);display:flex;align-items:center;justify-content:space-between;gap:12px;font-family:Poppins,sans-serif;';
-    box.innerHTML = `<div style="display:flex;align-items:center;gap:12px"><div style="width:44px;height:44px;border-radius:10px;background:#eef;padding:6px;display:flex;align-items:center;justify-content:center;font-weight:700">+</div><div><div style="font-weight:600">Add Contacts</div><div style="font-size:12px;color:#6b7280">Import from device or share a link</div></div></div><div><button id="openAddContactsBtn" style="padding:8px 12px;border-radius:8px;border:none;background:#0f172a;color:white;cursor:pointer">Open</button></div>`;
-    return box;
-  }
-  function installAddBoxIfInbox(){
-    const isInbox = window.location.pathname === '/inbox' || !!document.getElementById('contactsContainer');
-    if (!isInbox) return;
-    const container = document.querySelector('#main') || document.body;
-    if (!document.getElementById('addContactsBox')) {
-      const btn = createAddContactsButton();
-      container.prepend(btn);
-      document.getElementById('openAddContactsBtn')?.addEventListener('click', openAddContactsModal);
+      const fonts = document.createElement("link");
+      fonts.href = "https://fonts.googleapis.com/css2?family=Pacifico&family=Poppins:wght@400;600&display=swap";
+      fonts.rel = "stylesheet";
+      document.head.appendChild(fonts);
     }
   }
 
-  function openAddContactsModal(){
-    // full modal code from your original (kept compact here)
-    const overlay = document.createElement('div'); overlay.id = 'addContactsOverlay';
-    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.35);display:flex;align-items:center;justify-content:center;z-index:2000;';
-    const dialog = document.createElement('div'); dialog.style.cssText = 'width:92%;max-width:720px;background:white;padding:18px;border-radius:12px;box-shadow:0 10px 40px rgba(2,6,23,0.2);font-family:Poppins,sans-serif;';
-    dialog.innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px"><strong style="font-size:18px">Add Contacts</strong><button id="closeAddContacts" style="background:none;border:none;font-size:18px">✖</button></div><div style="display:flex;gap:12px;margin-bottom:10px"><button id="useContactPicker" style="flex:1;padding:10px;border-radius:8px;background:#e0e7ff;">Pick from device</button><button id="createInviteLinkBtn" style="flex:1;padding:10px;border-radius:8px;background:#2563eb;color:white;">Create Invite Link</button></div><div id="addContactsResult" style="max-height:320px;overflow:auto"></div>`;
-    overlay.appendChild(dialog); document.body.appendChild(overlay);
-    document.getElementById('closeAddContacts')?.addEventListener('click', ()=> overlay.remove());
-    document.getElementById('useContactPicker')?.addEventListener('click', pickContactsFromDevice);
-    document.getElementById('createInviteLinkBtn')?.addEventListener('click', createInstantShareLink);
-  }
-
-  async function pickContactsFromDevice(){
-    // same logic as your original contact picker (kept intact)
-    const resultDiv = document.getElementById('addContactsResult');
-    if (!resultDiv) return;
-    resultDiv.innerHTML = '<div>Requesting contact permission...</div>';
+  function safeInitIcons() {
     try {
-      if ('contacts' in navigator && typeof navigator.contacts.select === 'function') {
-        const props = ['name','tel']; const opts = {multiple:true};
-        const contacts = await navigator.contacts.select(props, opts);
-        const normalized = [];
-        for (const c of contacts) {
-          const name = Array.isArray(c.name) ? c.name[0] : (c.name || '');
-          const tels = Array.isArray(c.tel) ? c.tel : (c.tel ? [c.tel] : []);
-          for (const t of tels) normalized.push({name: name || '', phone: normalizePhone(t)});
-        }
-        if (!normalized.length) { resultDiv.innerHTML = '<div>No phone numbers selected.</div>'; return; }
-        showSelectedAndSend(normalized);
-      } else {
-        resultDiv.innerHTML = '<div>Your browser does not support the Contacts Picker API. Use the invite link option.</div>';
+      if (window.lucide && typeof window.lucide.createIcons === "function") {
+        window.lucide.createIcons();
+      } else if (window.lucide?.default?.createIcons) {
+        window.lucide.default.createIcons();
       }
-    } catch (err) {
-      console.error(err); resultDiv.innerHTML = '<div>Permission denied or error accessing contacts.</div>';
-    }
+    } catch (err) { console.error("Lucide init error:", err); }
   }
 
-  function showSelectedAndSend(list){
-    const resultDiv = document.getElementById('addContactsResult');
-    if (!resultDiv) return;
-    const uniq = []; const seen = new Set();
-    for(const it of list){
-      if(!it.phone) continue;
-      const p = normalizePhone(it.phone); if(!p) continue; if(seen.has(p)) continue; seen.add(p); uniq.push({name: it.name || '', phone: p});
-    }
-    if(!uniq.length){ resultDiv.innerHTML = '<div>No valid phone numbers found.</div>'; return; }
-    resultDiv.innerHTML = '<div style="margin-bottom:8px">Selected contacts:</div>';
-    const grid = document.createElement('div'); grid.style.display='grid'; grid.style.gridTemplateColumns='1fr 120px'; grid.style.gap='8px';
-    uniq.forEach(u=>{
-      const left = document.createElement('div'); left.textContent = (u.name||'(no name)') + ' — ' + u.phone;
-      const right = document.createElement('div'); const btn = document.createElement('button'); btn.textContent='Add'; btn.style.padding='6px 10px'; btn.style.borderRadius='8px';
-      btn.addEventListener('click', ()=> sendSelectedToServer([u])); right.appendChild(btn); grid.appendChild(left); grid.appendChild(right);
-    });
-    const bulk = document.createElement('div'); bulk.style.gridColumn='1/-1'; bulk.innerHTML = `<div style="margin-top:12px"><button id="bulkAddBtn" style="padding:8px 12px;border-radius:10px;background:#0f172a;color:#fff">Add All ${uniq.length}</button></div>`;
-    resultDiv.appendChild(grid); resultDiv.appendChild(bulk);
-    document.getElementById('bulkAddBtn')?.addEventListener('click', ()=> sendSelectedToServer(uniq));
-  }
-
-  async function sendSelectedToServer(items){
-    const resultDiv = document.getElementById('addContactsResult');
-    if (!resultDiv) return;
-    resultDiv.innerHTML = '<div>Saving contacts…</div>';
-    try {
-      const resp = await fetch('/api/contacts_add', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({contacts: items}) });
-      const j = await resp.json().catch(()=>({}));
-      if (!resp.ok) { resultDiv.innerHTML = `<div style="color:red">Error: ${j.error || resp.status}</div>`; return; }
-      let html = '<div style="margin-bottom:8px"><strong>Result</strong></div>';
-      if (j.present && j.present.length){ html += '<div style="margin-bottom:8px">These contacts are on InfinityChatter:</div>'; j.present.forEach(p => html += `<div>${p.phone} — ${p.username}</div>`); }
-      if (j.missing && j.missing.length){ html += '<div style="margin-top:10px;color:#b91c1c">These numbers are NOT on InfinityChatter:</div>'; j.missing.forEach(m => { html += `<div style="display:flex;gap:8px;align-items:center;margin-top:6px"><div style="flex:1">${m.phone}</div><button class="shareInviteBtn" data-phone="${m.phone}" style="padding:6px 10px;border-radius:8px">Share invite</button></div>`; }); }
-      resultDiv.innerHTML = html;
-      Array.from(document.getElementsByClassName('shareInviteBtn')).forEach(b=>{
-        b.addEventListener('click', async ()=>{
-          const phone = b.dataset.phone || null; b.textContent = 'Creating…';
-          const profile = JSON.parse(localStorage.getItem('infinity_profile') || '{}'); const username = profile.name || profile.username || null;
-          const body = phone ? { phone } : {}; if (username) body.username = username;
-          const r = await fetch('/api/create_contact_invite', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
-          const jr = await r.json().catch(()=>({}));
-          if (jr && jr.url) { await navigator.clipboard.writeText(jr.url).catch(()=>{}); b.textContent = 'Copied link'; if (navigator.share) { try { await navigator.share({title:'Join me on InfinityChatter', text:'Join me on InfinityChatter ♾️', url: jr.url}); } catch(e){} } else alert('Invite link copied to clipboard:\\n' + jr.url); } else b.textContent = 'Error';
-        });
-      });
-    } catch (err) {
-      console.error(err); resultDiv.innerHTML = '<div style="color:red">Network or internal error.</div>';
-    }
-  }
-
-  async function createInstantShareLink(){
-    const resDiv = document.getElementById('addContactsResult'); if (!resDiv) return; resDiv.innerHTML = 'Creating invite link...';
-    const profile = JSON.parse(localStorage.getItem('infinity_profile')||'{}'); const username = profile.name || profile.username || null;
-    try {
-      const res = await fetch('/api/create_contact_invite', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(username ? { username } : {}) });
-      const j = await res.json().catch(()=>({}));
-      if (res.ok && j && j.url) {
-        await navigator.clipboard.writeText(j.url).catch(()=>{});
-        resDiv.innerHTML = `<div>✅ Invite link created!<br><br><div style="display:flex;gap:8px;align-items:center;"><input id="inviteLinkInput" style="flex:1;padding:6px;border:1px solid #ccc;border-radius:8px" value="${escapeHtml(j.url)}" readonly /><button id="copyInviteLinkBtn" style="padding:6px 10px;border-radius:8px;background:#0f172a;color:#fff;">Copy</button></div></div>`;
-        document.getElementById('copyInviteLinkBtn')?.addEventListener('click', async ()=>{ const link = document.getElementById('inviteLinkInput').value; await navigator.clipboard.writeText(link).catch(()=>{}); alert('Copied link to clipboard!'); });
-      } else resDiv.innerHTML = `<div style="color:red">Failed to create link: ${j.error || res.status}</div>`;
-    } catch (err) { console.error(err); resDiv.innerHTML = '<div style="color:red">Network or internal error.</div>'; }
-  }
-
-  window.openAddContactsModal = openAddContactsModal;
-
-  // --- Contacts renderer & menu (defined globally but used only if contacts container exists) ---
-  function renderContacts(list){
-    const container = document.getElementById('contactsContainer');
-    if(!container) return;
-    container.innerHTML = '';
-    const addBox = document.getElementById('addContactsBox');
-    if(!list || !list.length){
-      container.innerHTML = '<div style="padding:18px;color:#64748b">No contacts yet</div>';
-      if(addBox) addBox.style.display='flex';
-      document.getElementById('headerAddBtn')?.remove();
+  function loadLucideOnce(callback) {
+    if (window.lucide || document.querySelector('script[src*="lucide"]')) {
+      if (typeof callback === 'function') callback();
+      safeInitIcons();
       return;
     }
-    if(addBox) addBox.style.display='none';
-    ensureHeaderAddButton();
-    list.forEach(item=>{
-      const card = document.createElement('div'); card.className='contact-card'; card.style.position='relative'; card.style.display='flex'; card.style.gap='12px'; card.style.padding='12px'; card.style.alignItems='center';
-      card.innerHTML = `<div class="contact-avatar">${ item.avatar_url ? '<img src="'+escapeHtml(item.avatar_url)+'" style="width:56px;height:56px;object-fit:cover;border-radius:8px;">' : escapeHtml((item.name||'')[0]||'?') }</div><div style="flex:1"><div style="font-weight:700">${escapeHtml(item.name || item.contact)}</div><div style="color:#64748b;font-size:0.9rem;margin-top:6px">${escapeHtml(item.last_text || '')}</div></div><div style="display:flex;align-items:center;gap:8px"><div style="color:#94a3b8;font-size:0.85rem">${ item.last_ts ? new Date(item.last_ts*1000).toLocaleString() : '' }</div><button class="contact-menu-btn" title="Options" aria-haspopup="true" aria-expanded="false"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="5" r="1"></circle><circle cx="12" cy="12" r="1"></circle><circle cx="12" cy="19" r="1"></circle></svg></button></div>`;
-      const profile = JSON.parse(localStorage.getItem('infinity_profile')||'{}');
-      card.addEventListener('click', ()=> { const peerToken = item.peer_token || item.contact; const qs = new URLSearchParams(); qs.set('t', peerToken); if(profile && profile.name) qs.set('username', profile.name); window.location.href = '/chat?' + qs.toString(); });
-      const menuBtn = card.querySelector('.contact-menu-btn');
-      if(menuBtn) menuBtn.addEventListener('click', (e)=>{ e.stopPropagation(); toggleContactMenu(card, item); });
-      container.appendChild(card);
-    });
-  }
-  window.renderContacts = renderContacts; // expose if inbox loaded
-
-  function ensureHeaderAddButton(){
-    if(document.getElementById('headerAddBtn')) return;
-    const header = document.querySelector('header'); if(!header) return;
-    const btn = document.createElement('button'); btn.id='headerAddBtn'; btn.title='Add Contact';
-    btn.style.cssText = 'position:absolute;right:18px;top:14px;width:38px;height:38px;border-radius:50%;background:#0f172a;color:#fff;font-size:24px;border:none;cursor:pointer;display:flex;align-items:center;justify-content:center;';
-    btn.textContent = '+'; btn.addEventListener('click', openAddContactsModal); header.appendChild(btn);
+    const s = document.createElement('script');
+    s.src = "https://unpkg.com/lucide@0.395.0/dist/umd/lucide.min.js";
+    s.async = true;
+    s.onload = () => { safeInitIcons(); if (typeof callback === 'function') callback(); };
+    document.head.appendChild(s);
   }
 
-  function closeAllContactMenus(){ document.querySelectorAll('.contact-popover').forEach(p=>p.remove()); document.querySelectorAll('.contact-menu-btn').forEach(b=>b.setAttribute('aria-expanded','false')); }
+  // ---- UI ----
+  loadFontsOnce();
+  loadLucideOnce();
 
-  function toggleContactMenu(card, item){
-    const existing = card.querySelector('.contact-popover');
-    if(existing){ existing.classList.remove('show'); setTimeout(()=>existing.remove(), 200); return; }
-    closeAllContactMenus();
-    const menu = document.createElement('div'); menu.className='contact-popover';
-    menu.innerHTML = `<button data-action="open">Open Chat</button><button data-action="block">Block</button><button data-action="delete" class="danger">Delete Chat</button>`;
-    card.appendChild(menu); setTimeout(()=>menu.classList.add('show'), 10);
+  document.querySelectorAll("header").forEach(el => el.remove());
+  const header = document.createElement("header");
+  header.style.cssText = `
+    width:100%;
+    background:#fff;
+    padding:14px 20px 10px;
+    position:fixed;
+    top:0;
+    left:0;
+    z-index:1000;
+    box-shadow:0 1px 10px rgba(0,0,0,0.05);
+    display:flex;
+    flex-direction:column;
+    align-items:flex-start;
+  `;
+  header.innerHTML = `
+    <div style="font-family:'Pacifico',cursive;font-size:32px;font-weight:500;color:#0f172a;line-height:1;">InfinityChatter</div>
+    <div id="subLabel" style="font-family:'Poppins',sans-serif;font-size:15px;color:#475569;margin-top:3px;">Updates</div>
+  `;
+  document.body.prepend(header);
 
-    menu.querySelector('[data-action="open"]').addEventListener('click',(e)=>{ e.stopPropagation(); card.click(); closeAllContactMenus(); });
-    menu.querySelector('[data-action="block"]').addEventListener('click',(e)=>{ e.stopPropagation(); if(confirm('Block '+(item.name||item.contact)+'?')){ card.style.opacity='0.5'; alert('Contact blocked (demo).'); } closeAllContactMenus(); });
-    menu.querySelector('[data-action="delete"]').addEventListener('click',(e)=>{ e.stopPropagation(); if(confirm('Delete chat with '+(item.name||item.contact)+'?')) card.remove(); closeAllContactMenus(); });
+  const nav = document.querySelector('.bottom-nav');
+  const tabs = [
+    { id: "chats", icon: "message-circle", label: "Chats" },
+    { id: "calls", icon: "phone", label: "Calls" },
+    { id: "Updates", icon: "user", label: "Updates" },
+    { id: "settings", icon: "settings", label: "Settings" }
+  ];
 
-    document.addEventListener('click',(ev)=>{ if(!menu.contains(ev.target) && !card.querySelector('.contact-menu-btn').contains(ev.target)){ menu.classList.remove('show'); setTimeout(()=>menu.remove(),200); } }, { once: true });
-  }
+  if (!nav) {
+    console.warn("⚠️ .bottom-nav not found");
+  } else {
+    nav.classList.add("ios-bottom-nav");
+    nav.style.cssText = `
+      position:fixed;
+      bottom:20px;
+      left:50%;
+      transform:translateX(-50%);
+      width:92%;
+      max-width:480px;
+      background:rgba(255,255,255,0.55);
+      backdrop-filter:blur(30px) saturate(180%);
+      border:1px solid rgba(255,255,255,0.4);
+      border-radius:40px;
+      box-shadow:0 10px 25px rgba(0,0,0,0.12);
+      display:flex;
+      justify-content:space-around;
+      align-items:center;
+      padding:10px 0;
+      font-family:'Poppins',sans-serif;
+      z-index:1000;
+      transition:all .3s ease;
+    `;
 
-  // --- Contacts loader (only invoked on inbox if contactsContainer exists) ---
-  async function loadContacts(){
-    try{
-      const profile = JSON.parse(localStorage.getItem('infinity_profile')||'{}');
-      const username = (profile.name||profile.username||'').trim();
-      const url = username ? `/contacts_list?username=${encodeURIComponent(username)}` : '/contacts_list';
-      const resp = await fetch(url, { credentials: 'same-origin' });
-      if(!resp.ok) throw new Error('failed: '+resp.status);
-      const data = await resp.json();
-      renderContacts(data.contacts || []);
-    }catch(err){
-      const container = document.getElementById('contactsContainer');
-      if(container) container.innerHTML = '<div style="padding:18px;color:#c00">Unable to load contacts</div>';
-      console.error('loadContacts', err);
-    }
-  }
-  window.loadContacts = loadContacts;
-
-  // --- SPA navigation / sliding ---
-  const main = document.querySelector(mainSelector);
-  function findNavItemByPath(path){ return tabOrder.find(k => routeMap[k] === path); }
-
-  async function fetchPageContent(url){
-    const res = await fetch(url, { headers: { 'X-Requested-With': 'XMLHttpRequest' }, credentials: 'same-origin' });
-    if(!res.ok) throw new Error('fetch failed');
-    const text = await res.text();
-    const parser = new DOMParser(); const doc = parser.parseFromString(text, 'text/html');
-    const newMain = doc.querySelector(mainSelector);
-    if(newMain) return newMain.innerHTML;
-    return doc.body ? doc.body.innerHTML : text;
-  }
-
-  async function navigateTo(path, opts={}) {
-    const { replaceHistory=false } = opts;
-    if(!main){ window.location.href = path; return; }
-    if(path === location.pathname && !replaceHistory) return;
-    let animateDirection = opts.animateDirection || 'auto';
-    const currentIndex = tabOrder.indexOf(findNavItemByPath(location.pathname) || 'chats');
-    const targetIndex = tabOrder.indexOf(findNavItemByPath(path) || 'chats');
-    if(animateDirection === 'auto') animateDirection = (targetIndex > currentIndex) ? 'from-right' : 'from-left';
-
-    let newHtml;
-    try { newHtml = await fetchPageContent(path); } catch(e){ window.location.href = path; return; }
-
-    const newView = document.createElement('div'); newView.className='page-view';
-    newView.innerHTML = `<div class="page-inner">${newHtml}</div>`;
-    newView.classList.add(animateDirection === 'from-right' ? 'page-enter-from-right' : 'page-enter-from-left');
-    main.appendChild(newView);
-    newView.getBoundingClientRect();
-    newView.classList.add('page-enter-to-center');
-
-    const oldViews = Array.from(main.querySelectorAll('.page-view:not(:last-child)'));
-    if(oldViews.length){
-      oldViews.forEach(v=>{
-        v.classList.add('exiting');
-        v.classList.add(animateDirection === 'from-right' ? 'page-exit-to-left' : 'page-exit-to-right');
-        v.addEventListener('transitionend', ()=> v.remove(), { once:true });
-      });
+    const existing = Array.from(nav.children);
+    function makeIconLabel(tab) {
+      const frag = document.createDocumentFragment();
+      const i = document.createElement('i');
+      i.setAttribute('data-lucide', tab.icon);
+      i.style.width = '24px';
+      i.style.height = '24px';
+      i.style.stroke = '#0f172a';
+      frag.appendChild(i);
+      const lbl = document.createElement('div');
+      lbl.style.fontSize = '12px';
+      lbl.style.marginTop = '-2px';
+      lbl.style.color = '#0f172a';
+      lbl.textContent = tab.label;
+      frag.appendChild(lbl);
+      return frag;
     }
 
-    newView.addEventListener('transitionend', ()=> { newView.classList.remove('page-enter-from-right','page-enter-from-left','page-enter-to-center'); newView.style.position='relative'; }, { once:true });
+    for (let i = 0; i < tabs.length; i++) {
+      const tab = tabs[i];
+      let item = existing[i];
+      if (item) {
+        while (item.firstChild) item.removeChild(item.firstChild);
+        item.appendChild(makeIconLabel(tab));
+        item.classList.add('nav-item');
+        item.dataset.id = tab.id;
+        item.style.cssText = "text-align:center;cursor:pointer;transition:transform .2s;flex:1;";
+      } else {
+        item = document.createElement('div');
+        item.className = 'nav-item';
+        item.dataset.id = tab.id;
+        item.style.cssText = "text-align:center;cursor:pointer;transition:transform .2s;flex:1;";
+        item.appendChild(makeIconLabel(tab));
+        nav.appendChild(item);
+      }
+    }
 
-    try {
-      if(replaceHistory) history.replaceState({spa:true}, '', path);
-      else history.pushState({spa:true}, '', path);
-    } catch(e){ console.warn('history failed', e); }
+    safeInitIcons();
 
-    const navKey = findNavItemByPath(path) || 'chats';
-    document.getElementById('subLabel') && (document.getElementById('subLabel').textContent = navKey.charAt(0).toUpperCase()+navKey.slice(1));
-  }
-  window.navigateTo = navigateTo;
+    // --- fixed and simplified correct navigation map ---
+    const routeMap = {
+      chats: "/inbox",          // main chat inbox page
+      calls: "/calls",    // call page
+      Updates: "/updates",     // Updates page
+      settings: "/settings"    // settings page
+    };
 
-  // --- bind nav clicks to SPA navigation (idempotent) ---
-  function bindNavClicks(){
-    document.querySelectorAll('.bottom-nav .nav-item').forEach(item=>{
-      item.onclick = (ev)=> {
-        ev.preventDefault();
+    Array.from(nav.querySelectorAll('.nav-item')).forEach(item => {
+      if (item.getAttribute('data-bound')) return;
+      item.setAttribute('data-bound', '1');
+      item.addEventListener('click', () => {
+        // click animation
+        item.style.transform = 'scale(1.12)';
+        setTimeout(() => item.style.transform = 'scale(1)', 160);
+
         const id = item.dataset.id;
+        const sub = document.getElementById('subLabel');
+        if (sub) sub.textContent = id.charAt(0).toUpperCase() + id.slice(1);
+
+        // correct routing
         const target = routeMap[id];
-        if(!target) return;
-        const currentIndex = tabOrder.indexOf( tabOrder.find(k=>location.pathname === routeMap[k]) || 'chats');
-        const targetIndex = tabOrder.indexOf(id);
-        const dir = (targetIndex > currentIndex) ? 'from-right' : 'from-left';
-        navigateTo(target, { animateDirection: dir });
-      };
+        if (target && window.location.pathname !== target) {
+          window.location.href = target;
+        }
+      });
     });
   }
 
-  // handle back/forward
-  window.addEventListener('popstate', ()=> {
-    const p = location.pathname;
-    navigateTo(p, { replaceHistory: true, animateDirection: 'from-left' }).catch(()=>{});
-  });
+  // Elegant non-repeating gradient background
+  document.documentElement.style.background = 'linear-gradient(180deg, #f8fafc 0%, #eef2ff 100%)';
+  document.documentElement.style.backgroundRepeat = 'no-repeat';
+  document.documentElement.style.backgroundAttachment = 'fixed';
 
-  // --- initial DOM ready setup ---
-  document.addEventListener('DOMContentLoaded', ()=>{
-    installHeaderAndNav();
-    bindNavClicks();
-
-    // ensure initial main wrapper exists and is wrapped in .page-view
-    const m = document.querySelector(mainSelector);
-    if(m && !m.querySelector('.page-view')) {
-      const wrap = document.createElement('div'); wrap.className='page-view'; wrap.innerHTML = `<div class="page-inner">${m.innerHTML}</div>`;
-      m.innerHTML = ''; m.appendChild(wrap);
-    }
-
-    // Only install Add Contacts box and load contacts when we're on inbox / have contactsContainer
-    const isInbox = window.location.pathname === '/inbox' || !!document.getElementById('contactsContainer');
-    if(isInbox) {
-      installAddBoxIfInbox();
-      // load contacts only if contactsContainer exists (safe)
-      if(document.getElementById('contactsContainer')) loadContacts();
-    }
-
-    // expose for quick console testing
-    window.__infinity.renderContacts = renderContacts;
-    window.__infinity.loadContacts = loadContacts;
-  });
+  const currTop = parseInt(window.getComputedStyle(document.body).paddingTop || '0', 10);
+  if (currTop < 90) document.body.style.paddingTop = '90px';
+  const currBottom = parseInt(window.getComputedStyle(document.body).paddingBottom || '0', 10);
+  if (currBottom < 130) document.body.style.paddingBottom = '130px';
 
 })();
+
+(function(){
+  const routeMap = {
+    chats: '/inbox',
+    calls: '/calls',
+    Updates: '/Updates',
+    settings: '/settings'
+  };
+
+  const tabOrder = ['chats', 'calls', 'Updates', 'settings'];
+  let currentTab = Object.keys(routeMap).find(k => window.location.pathname.includes(k)) || 'chats';
+
+  function slideToPage(targetId){
+    if(targetId === currentTab) return;
+    const container = document.getElementById('pageContent');
+    if(!container) { window.location.href = routeMap[targetId]; return; }
+
+    const targetIndex = tabOrder.indexOf(targetId);
+    const currentIndex = tabOrder.indexOf(currentTab);
+    const direction = targetIndex > currentIndex ? 'right' : 'left';
+
+    const oldContent = container.cloneNode(true);
+    oldContent.style.position = 'absolute';
+    oldContent.style.top = '0';
+    oldContent.style.left = '0';
+    oldContent.style.width = '100%';
+    oldContent.style.transition = 'transform .35s ease';
+    oldContent.style.zIndex = '1';
+    oldContent.style.background = '#fff';
+
+    const newContainer = document.createElement('div');
+    newContainer.id = 'pageContent';
+    newContainer.style.position = 'absolute';
+    newContainer.style.top = '0';
+    newContainer.style.width = '100%';
+    newContainer.style.transition = 'transform .35s ease';
+    newContainer.style.zIndex = '2';
+    newContainer.style.background = '#fff';
+
+    // initial position
+    newContainer.style.left = direction === 'right' ? '100%' : '-100%';
+
+    document.body.appendChild(newContainer);
+    document.body.appendChild(oldContent);
+
+    fetch(routeMap[targetId], {credentials: 'same-origin'})
+      .then(r => r.text())
+      .then(html => {
+        const parser = new DOMParser();
+        const doc = parser.parseFromString(html, 'text/html');
+        const newInner = doc.getElementById('pageContent');
+        if(newInner) newContainer.innerHTML = newInner.innerHTML;
+        else newContainer.innerHTML = html;
+
+        requestAnimationFrame(()=>{
+          oldContent.style.transform = `translateX(${direction === 'right' ? '-100%' : '100%'})`;
+          newContainer.style.transform = `translateX(${direction === 'right' ? '-100%' : '100%'})`;
+        });
+
+        setTimeout(()=>{
+          oldContent.remove();
+          newContainer.style.position = 'relative';
+          newContainer.style.left = '0';
+          newContainer.style.transform = 'none';
+          history.pushState({}, '', routeMap[targetId]);
+          currentTab = targetId;
+        }, 350);
+      })
+      .catch(err=>{
+        console.error('Slide load failed', err);
+        window.location.href = routeMap[targetId];
+      });
+  }
+
+  // Attach listeners
+  document.querySelectorAll('.bottom-nav .nav-item').forEach(item=>{
+    item.addEventListener('click', e=>{
+      e.preventDefault();
+      const id = item.dataset.id;
+      slideToPage(id);
+    });
+  });
+
+  // Handle browser back button
+  window.addEventListener('popstate', ()=> window.location.href = location.pathname);
+})();
+
+// === InfinityChatter Smooth SPA Slide Navigation ===
+(function(){
+  const routeMap = {
+    chats: '/inbox',
+    calls: '/calls',
+    Updates: '/Updates',
+    settings: '/settings'
+  };
+  const tabOrder = ['chats','calls','Updates','settings'];
+
+  async function fetchPageContent(url) {
+    const res = await fetch(url, {credentials:'same-origin'});
+    if(!res.ok) throw new Error('fetch failed');
+    const text = await res.text();
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(text, 'text/html');
+    const content = doc.getElementById('pageContent');
+    return content ? content.innerHTML : text;
+  }
+
+  async function slideToPage(targetId) {
+    const targetPath = routeMap[targetId];
+    if (!targetPath || location.pathname === targetPath) return;
+
+    const container = document.getElementById('pageContent');
+    if (!container) { window.location.href = targetPath; return; }
+
+    // determine direction
+    const currId = Object.keys(routeMap).find(k => location.pathname.includes(k)) || 'chats';
+    const currIndex = tabOrder.indexOf(currId);
+    const targetIndex = tabOrder.indexOf(targetId);
+    const direction = targetIndex > currIndex ? 'right' : 'left';
+
+    const oldContent = container.cloneNode(true);
+    oldContent.style.position = 'absolute';
+    oldContent.style.top = '0';
+    oldContent.style.left = '0';
+    oldContent.style.width = '100%';
+    oldContent.style.transition = 'transform .35s ease';
+    oldContent.style.zIndex = '1';
+    oldContent.style.background = '#fff';
+
+    const newContainer = document.createElement('div');
+    newContainer.id = 'pageContent';
+    newContainer.style.position = 'absolute';
+    newContainer.style.top = '0';
+    newContainer.style.width = '100%';
+    newContainer.style.transition = 'transform .35s ease';
+    newContainer.style.zIndex = '2';
+    newContainer.style.background = '#fff';
+    newContainer.style.left = direction === 'right' ? '100%' : '-100%';
+
+    document.body.appendChild(newContainer);
+    document.body.appendChild(oldContent);
+
+    try {
+      const html = await fetchPageContent(targetPath);
+      newContainer.innerHTML = html;
+    } catch (err) {
+      console.error('Slide load failed', err);
+      window.location.href = targetPath;
+      return;
+    }
+
+    // animate slide
+    requestAnimationFrame(() => {
+      oldContent.style.transform = `translateX(${direction === 'right' ? '-100%' : '100%'})`;
+      newContainer.style.transform = `translateX(${direction === 'right' ? '-100%' : '100%'})`;
+    });
+
+    setTimeout(() => {
+      oldContent.remove();
+      newContainer.style.position = 'relative';
+      newContainer.style.left = '0';
+      newContainer.style.transform = 'none';
+      history.pushState({}, '', targetPath);
+    }, 350);
+  }
+
+  // intercept bottom-nav clicks
+  document.querySelectorAll('.bottom-nav .nav-item').forEach(item => {
+    item.addEventListener('click', e => {
+      e.preventDefault();
+      const id = item.dataset.id;
+      slideToPage(id);
+    });
+  });
+
+  // browser back/forward support
+  window.addEventListener('popstate', () => {
+    const id = Object.keys(routeMap).find(k => location.pathname.includes(k)) || 'chats';
+    slideToPage(id);
+  });
+})();
+
 </script>
 </body>
 </html>
