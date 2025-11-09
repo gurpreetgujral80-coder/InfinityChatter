@@ -496,11 +496,12 @@
     const container = document.getElementById('contactsContainer');
     container.innerHTML = '';
 
+    const addBox = document.getElementById('addContactsBox');
     const profile = JSON.parse(localStorage.getItem('infinity_profile') || '{}');
     const userLabel = profile.name || profile.username || 'You';
     const selfContact = {
       name: `${userLabel} (You)`,
-      contact: profile.username || profile.name || "You",
+      contact: profile.username || profile.name || "self",
       last_text: "Message Yourself",
       last_ts: Math.floor(Date.now() / 1000),
       avatar_url: profile.avatar_url
@@ -517,7 +518,6 @@
     
     // Sort all contacts by last message timestamp (latest first)
     list.sort((a, b) => (b.last_ts || 0) - (a.last_ts || 0));
-    const addBox = document.getElementById('addContactsBox');
   
     if (list.length < 2) {
       container.innerHTML = '<div style="padding:18px;color:#64748b">No contacts yet</div>';
@@ -567,7 +567,7 @@
   
       card.addEventListener('click', () => {
         const myUsername = profile.username || profile.name || "You";
-        const isSelf = item.contact === myUsername || item.contact === "You";
+        const isSelf = item.contact === myUsername || item.contact === "self";
       
         const qs = new URLSearchParams();
         qs.set('t', isSelf ? 'self' : (item.peer_token || item.contact));
