@@ -183,26 +183,6 @@
       Updates: "/updates",     // Updates page
       settings: "/settings"    // settings page
     };
-
-    Array.from(nav.querySelectorAll('.nav-item')).forEach(item => {
-      if (item.getAttribute('data-bound')) return;
-      item.setAttribute('data-bound', '1');
-      item.addEventListener('click', () => {
-        // click animation
-        item.style.transform = 'scale(1.12)';
-        setTimeout(() => item.style.transform = 'scale(1)', 160);
-
-        const id = item.dataset.id;
-        const sub = document.getElementById('subLabel');
-        if (sub) sub.textContent = id.charAt(0).toUpperCase() + id.slice(1);
-
-        // correct routing
-        const target = routeMap[id];
-        if (target && window.location.pathname !== target) {
-          window.location.href = target;
-        }
-      });
-    });
   }
 
   // Elegant non-repeating gradient background
@@ -215,92 +195,6 @@
   const currBottom = parseInt(window.getComputedStyle(document.body).paddingBottom || '0', 10);
   if (currBottom < 130) document.body.style.paddingBottom = '130px';
 
-})();
-
-(function(){
-  const routeMap = {
-    chats: '/inbox',
-    calls: '/calls',
-    Updates: '/Updates',
-    settings: '/settings'
-  };
-
-  const tabOrder = ['chats', 'calls', 'Updates', 'settings'];
-  let currentTab = Object.keys(routeMap).find(k => window.location.pathname.includes(k)) || 'chats';
-
-  function slideToPage(targetId){
-    if(targetId === currentTab) return;
-    const container = document.getElementById('pageContent');
-    if(!container) { window.location.href = routeMap[targetId]; return; }
-
-    const targetIndex = tabOrder.indexOf(targetId);
-    const currentIndex = tabOrder.indexOf(currentTab);
-    const direction = targetIndex > currentIndex ? 'right' : 'left';
-
-    const oldContent = container.cloneNode(true);
-    oldContent.style.position = 'absolute';
-    oldContent.style.top = '0';
-    oldContent.style.left = '0';
-    oldContent.style.width = '100%';
-    oldContent.style.transition = 'transform .35s ease';
-    oldContent.style.zIndex = '1';
-    oldContent.style.background = '#fff';
-
-    const newContainer = document.createElement('div');
-    newContainer.id = 'pageContent';
-    newContainer.style.position = 'absolute';
-    newContainer.style.top = '0';
-    newContainer.style.width = '100%';
-    newContainer.style.transition = 'transform .35s ease';
-    newContainer.style.zIndex = '2';
-    newContainer.style.background = '#fff';
-
-    // initial position
-    newContainer.style.left = direction === 'right' ? '100%' : '-100%';
-
-    document.body.appendChild(newContainer);
-    document.body.appendChild(oldContent);
-
-    fetch(routeMap[targetId], {credentials: 'same-origin'})
-      .then(r => r.text())
-      .then(html => {
-        const parser = new DOMParser();
-        const doc = parser.parseFromString(html, 'text/html');
-        const newInner = doc.getElementById('pageContent');
-        if(newInner) newContainer.innerHTML = newInner.innerHTML;
-        else newContainer.innerHTML = html;
-
-        requestAnimationFrame(()=>{
-          oldContent.style.transform = `translateX(${direction === 'right' ? '-100%' : '100%'})`;
-          newContainer.style.transform = `translateX(${direction === 'right' ? '-100%' : '100%'})`;
-        });
-
-        setTimeout(()=>{
-          oldContent.remove();
-          newContainer.style.position = 'relative';
-          newContainer.style.left = '0';
-          newContainer.style.transform = 'none';
-          history.pushState({}, '', routeMap[targetId]);
-          currentTab = targetId;
-        }, 350);
-      })
-      .catch(err=>{
-        console.error('Slide load failed', err);
-        window.location.href = routeMap[targetId];
-      });
-  }
-
-  // Attach listeners
-  document.querySelectorAll('.bottom-nav .nav-item').forEach(item=>{
-    item.addEventListener('click', e=>{
-      e.preventDefault();
-      const id = item.dataset.id;
-      slideToPage(id);
-    });
-  });
-
-  // Handle browser back button
-  window.addEventListener('popstate', ()=> window.location.href = location.pathname);
 })();
 
 // === InfinityChatter Full-Page Slide Transition ===
