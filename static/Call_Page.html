@@ -32,11 +32,8 @@
       </div>
   </header>
   
-  <div id="pageContent" style="padding-top:84px; min-height:60vh;">
+  <div id="pageContent" style="min-height:60vh;">
     <main class="inbox-main">
-      <div id="contactsContainer">
-        <div style="padding:18px;color:#64748b">Loading contacts…</div>
-      </div>
     </main>
   </div>
   
@@ -53,28 +50,10 @@
   const profile = JSON.parse(localStorage.getItem('infinity_profile')||'{}');
   if(!profile.name){ window.location.href = '/login'; return; }
   document.getElementById('myNameHeader').textContent = profile.name || '';
-
-  // helper escape
-  function escapeHtml(s){ return (s||'').toString().replace(/[&<>"']/g, c=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
-
-  async function loadContacts(){
-    try {
-      const resp = await fetch('/contacts_list', { credentials: 'same-origin' });
-      if(!resp.ok) throw new Error('failed');
-      const data = await resp.json();
-      renderContacts(data.contacts || []);
-    } catch (err) {
-      document.getElementById('contactsContainer').innerHTML = '<div style="padding:18px;color:#c00">Unable to load contacts</div>';
-      console.error('loadContacts', err);
-    }
-  }
-
   document.getElementById('nav-calls').addEventListener('click', ()=> window.location.href='/calls');
   document.getElementById('nav-Updates').addEventListener('click', ()=> window.location.href='/Updates');
   document.getElementById('nav-chats').addEventListener('click', ()=> window.location.href='/inbox');
   document.getElementById('nav-settings').addEventListener('click', ()=> window.location.href='/settings');
-
-  loadContacts();
 })();
 // === InfinityChatter: exact header UI + iOS nav style + corrected nav routing ===
 (function() {
