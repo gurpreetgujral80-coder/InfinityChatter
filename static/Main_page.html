@@ -501,7 +501,7 @@
     const profile = JSON.parse(localStorage.getItem('infinity_profile') || '{}');
     const userLabel = profile.name || profile.username || 'You';
   
-    // ✅ Always ensure a stable self-contact
+    // ✅ Always include a consistent self chat
     const selfContact = {
       name: `${userLabel} (You)`,
       contact: 'self',
@@ -510,29 +510,26 @@
       avatar_url: profile.avatar_url || ''
     };
   
+    // Ensure list exists and is an array
     list = Array.isArray(list) ? [...list] : [];
   
-    // ✅ Add self-chat if missing
-    if (!list.some(c => (c.contact || '') === 'self')) {
-      list.push(selfContact);
-    }
+    // ✅ Add self chat if missing
+    const hasSelf = list.some(c => (c.contact || '').toLowerCase() === 'self');
+    if (!hasSelf) list.push(selfContact);
   
-    // ✅ Sort contacts (latest first)
+    // ✅ Sort all contacts by latest message
     list.sort((a, b) => (b.last_ts || 0) - (a.last_ts || 0));
   
-    // ✅ Show “No contacts yet” and Add box only if 1 contact (self)
-    if (list.length < 2) {
-      container.innerHTML = `<div style="padding:18px;color:#64748b">No contacts yet</div>`;
+    // ✅ Hide "Add Contacts" only when 2 or more contacts (self + others)
+    if (list.length <= 1) {
       if (addBox) addBox.style.display = 'flex';
-      const headerBtn = document.getElementById('headerAddBtn');
-      if (headerBtn) headerBtn.remove();
-      return;
+    } else {
+      if (addBox) addBox.style.display = 'none';
     }
   
-    if (addBox) addBox.style.display = 'none';
     ensureHeaderAddButton();
   
-    // ✅ Render each contact card
+    // ✅ Render all contacts
     list.forEach(item => {
       const card = document.createElement('div');
       card.className = 'contact-card';
@@ -543,7 +540,9 @@
           ${
             item.avatar_url
               ? `<img src="${escapeHtml(item.avatar_url)}" style="width:56px;height:56px;object-fit:cover;border-radius:8px;">`
-              : `<div style="width:56px;height:56px;display:flex;align-items:center;justify-content:center;background:#e2e8f0;border-radius:8px;font-weight:600;color:#475569;">${escapeHtml((item.name || '?')[0])}</div>`
+              : `<div style="width:56px;height:56px;display:flex;align-items:center;justify-content:center;background:#e2e8f0;border-radius:8px;font-weight:600;color:#475569;">
+                   ${escapeHtml((item.name || '?')[0])}
+                 </div>`
           }
         </div>
         <div style="flex:1">
@@ -567,7 +566,7 @@
         </div>
       `;
   
-      // ✅ Open chat on click
+      // ✅ Open chat — self opens /chat?t=self
       card.addEventListener('click', () => {
         const isSelf = item.contact === 'self';
         const qs = new URLSearchParams();
@@ -576,7 +575,7 @@
         window.location.href = '/chat?' + qs.toString();
       });
   
-      // ✅ Menu button logic
+      // ✅ Popover menu
       const menuBtn = card.querySelector('.contact-menu-btn');
       if (menuBtn) {
         menuBtn.addEventListener('click', e => {
