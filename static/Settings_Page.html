@@ -202,11 +202,11 @@
   const routeMap = {
     chats: '/inbox',
     calls: '/calls',
-    Updates: '/updates',
+    Updates: '/Updates',
     settings: '/settings'
   };
 
-  // Inject bounce animation style
+  // Inject bounce animation style once
   const style = document.createElement('style');
   style.textContent = `
     @keyframes navBounce {
@@ -221,7 +221,7 @@
   `;
   document.head.appendChild(style);
 
-  // Add click logic with bounce
+  // Add click logic with bounce and header update
   document.querySelectorAll('.bottom-nav .nav-item').forEach(item => {
     item.addEventListener('click', e => {
       e.preventDefault();
@@ -231,11 +231,30 @@
 
       const id = item.dataset.id;
       const target = routeMap[id];
+
+      // Update header text instantly
+      const subLabel = document.getElementById('subLabel');
+      if (subLabel) {
+        subLabel.textContent = id.charAt(0).toUpperCase() + id.slice(1);
+      }
+
       if (target && window.location.pathname !== target) {
         setTimeout(() => window.location.href = target, 250); // navigate after bounce
       }
     });
   });
+
+  // Set correct header label on first load
+  const pathMap = {
+    '/inbox': 'Chats',
+    '/calls': 'Calls',
+    '/Updates': 'Updates',
+    '/settings': 'Settings'
+  };
+  const subLabel = document.getElementById('subLabel');
+  if (subLabel) {
+    subLabel.textContent = pathMap[window.location.pathname] || 'Chats';
+  }
 })();
 
 </script>
