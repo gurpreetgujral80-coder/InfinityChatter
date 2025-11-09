@@ -887,7 +887,7 @@
   window.addEventListener('popstate', ()=> window.location.href = location.pathname);
 })();
 
-// === InfinityChatter Smooth SPA Slide Navigation ===
+// === InfinityChatter Full-Page Slide Transition ===
 (function(){
   const routeMap = {
     chats: '/inbox',
@@ -897,85 +897,81 @@
   };
   const tabOrder = ['chats','calls','Updates','settings'];
 
-  async function fetchPageContent(url) {
-    const res = await fetch(url, {credentials:'same-origin'});
-    if(!res.ok) throw new Error('fetch failed');
+  async function fetchFullBody(url) {
+    const res = await fetch(url, { credentials: 'same-origin' });
+    if (!res.ok) throw new Error('Failed to fetch page');
     const text = await res.text();
     const parser = new DOMParser();
     const doc = parser.parseFromString(text, 'text/html');
-    const content = doc.getElementById('pageContent');
-    return content ? content.innerHTML : text;
+    // we’ll only take <body> content
+    return doc.body.innerHTML;
   }
 
   async function slideToPage(targetId) {
     const targetPath = routeMap[targetId];
     if (!targetPath || location.pathname === targetPath) return;
 
-    const container = document.getElementById('pageContent');
-    if (!container) { window.location.href = targetPath; return; }
-
-    // determine direction
     const currId = Object.keys(routeMap).find(k => location.pathname.includes(k)) || 'chats';
     const currIndex = tabOrder.indexOf(currId);
     const targetIndex = tabOrder.indexOf(targetId);
     const direction = targetIndex > currIndex ? 'right' : 'left';
 
-    const oldContent = container.cloneNode(true);
-    oldContent.style.position = 'absolute';
-    oldContent.style.top = '0';
-    oldContent.style.left = '0';
-    oldContent.style.width = '100%';
-    oldContent.style.transition = 'transform .35s ease';
-    oldContent.style.zIndex = '1';
-    oldContent.style.background = '#fff';
+    const oldBody = document.body.cloneNode(true);
+    oldBody.style.position = 'absolute';
+    oldBody.style.inset = '0';
+    oldBody.style.width = '100%';
+    oldBody.style.transition = 'transform .35s ease';
+    oldBody.style.zIndex = '1';
+    oldBody.style.overflow = 'hidden';
 
-    const newContainer = document.createElement('div');
-    newContainer.id = 'pageContent';
-    newContainer.style.position = 'absolute';
-    newContainer.style.top = '0';
-    newContainer.style.width = '100%';
-    newContainer.style.transition = 'transform .35s ease';
-    newContainer.style.zIndex = '2';
-    newContainer.style.background = '#fff';
-    newContainer.style.left = direction === 'right' ? '100%' : '-100%';
+    const newBody = document.createElement('div');
+    newBody.id = 'newBodyWrapper';
+    newBody.style.position = 'absolute';
+    newBody.style.inset = '0';
+    newBody.style.width = '100%';
+    newBody.style.transition = 'transform .35s ease';
+    newBody.style.zIndex = '2';
+    newBody.style.overflow = 'hidden';
+    newBody.style.left = direction === 'right' ? '100%' : '-100%';
 
-    document.body.appendChild(newContainer);
-    document.body.appendChild(oldContent);
+    document.documentElement.appendChild(newBody);
+    document.documentElement.appendChild(oldBody);
 
     try {
-      const html = await fetchPageContent(targetPath);
-      newContainer.innerHTML = html;
+      const html = await fetchFullBody(targetPath);
+      newBody.innerHTML = html;
     } catch (err) {
-      console.error('Slide load failed', err);
+      console.error('Slide fetch failed', err);
       window.location.href = targetPath;
       return;
     }
 
-    // animate slide
+    // Trigger sliding animation
     requestAnimationFrame(() => {
-      oldContent.style.transform = `translateX(${direction === 'right' ? '-100%' : '100%'})`;
-      newContainer.style.transform = `translateX(${direction === 'right' ? '-100%' : '100%'})`;
+      oldBody.style.transform = `translateX(${direction === 'right' ? '-100%' : '100%'})`;
+      newBody.style.transform = `translateX(${direction === 'right' ? '-100%' : '100%'})`;
     });
 
+    // cleanup after animation
     setTimeout(() => {
-      oldContent.remove();
-      newContainer.style.position = 'relative';
-      newContainer.style.left = '0';
-      newContainer.style.transform = 'none';
+      document.body.remove();
+      const finalBody = document.createElement('body');
+      finalBody.innerHTML = newBody.innerHTML;
+      document.documentElement.appendChild(finalBody);
+      newBody.remove();
       history.pushState({}, '', targetPath);
     }, 350);
   }
 
-  // intercept bottom-nav clicks
+  // bind to bottom-nav clicks
   document.querySelectorAll('.bottom-nav .nav-item').forEach(item => {
     item.addEventListener('click', e => {
       e.preventDefault();
-      const id = item.dataset.id;
-      slideToPage(id);
+      slideToPage(item.dataset.id);
     });
   });
 
-  // browser back/forward support
+  // back/forward navigation
   window.addEventListener('popstate', () => {
     const id = Object.keys(routeMap).find(k => location.pathname.includes(k)) || 'chats';
     slideToPage(id);
