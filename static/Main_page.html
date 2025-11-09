@@ -789,160 +789,137 @@
     document.querySelectorAll('.contact-menu-btn').forEach(b => b.setAttribute('aria-expanded','false'));
   }
   
-  /* toggleContactMenu now includes:
-     - "Edit Contact" (not for self)
-     - "Add Contact" when contact is not added (item.added === false OR not marked locally)
-  */
-  function toggleContactMenu(triggerBtn, card, item) {
-    // remove any existing for this contact
+  function toggleContactMenu(card, item) {
     closeAllContactMenus();
   
     const contactId = (item.contact || '').toString();
     const isSelf = contactId === 'self';
   
-    // build menu
+    // build container
     const menu = document.createElement('div');
     menu.className = 'contact-popover';
-    // basic styles (you may remove if you already inject global CSS)
     menu.style.cssText = `
-      position: absolute;
+      position:absolute;
       min-width:160px;
       padding:6px;
       border-radius:10px;
-      background: linear-gradient(180deg, rgba(255,255,255,0.95), rgba(250,250,250,0.9));
+      background:linear-gradient(180deg,rgba(255,255,255,0.95),rgba(250,250,250,0.9));
       box-shadow:0 8px 30px rgba(2,6,23,0.12);
       z-index:5000;
     `;
   
-    // helper to create button
-    const makeBtn = (text, cls) => {
+    // helper to create buttons
+    const makeBtn = (label, extra = '') => {
       const b = document.createElement('button');
+      b.textContent = label;
+      b.className = extra;
       b.type = 'button';
-      b.innerText = text;
-      b.className = cls || '';
-      b.style.cssText = 'display:block;width:100%;text-align:left;padding:8px 10px;border:none;background:transparent;cursor:pointer;border-radius:8px;';
-      b.addEventListener('mouseover', ()=> b.style.background='rgba(15,23,42,0.04)');
-      b.addEventListener('mouseout', ()=> b.style.background='transparent');
+      b.style.cssText = `
+        display:block;width:100%;text-align:left;padding:8px 10px;
+        border:none;background:transparent;cursor:pointer;
+        border-radius:8px;font-family:Poppins,sans-serif;
+      `;
+      b.onmouseover = () => (b.style.background = 'rgba(15,23,42,0.04)');
+      b.onmouseout = () => (b.style.background = 'transparent');
       return b;
     };
   
-    // Open Chat always
+    // --- 1. Open Chat ---
     const btnOpen = makeBtn('Open Chat');
-    btnOpen.addEventListener('click', (e) => {
+    btnOpen.onclick = e => {
       e.stopPropagation();
-      // trigger card click (which navigates)
       card.click();
       closeAllContactMenus();
-    });
+    };
     menu.appendChild(btnOpen);
   
-    // Edit Contact (skip for self)
+    // --- 2. Edit Contact ---
     if (!isSelf) {
       const btnEdit = makeBtn('Edit Contact');
-      btnEdit.addEventListener('click', (e) => {
+      btnEdit.onclick = e => {
         e.stopPropagation();
-        // show prompt for name (prefill with local or server name)
         const existing = getLocalContactName(contactId) || item.name || '';
-        showPromptModal({ title: 'Edit Contact Name', placeholder: 'Full name', initial: existing, submitText: 'Save' }, (name) => {
-          setLocalContactName(contactId, name);
-          updateCardDisplayedName(contactId, name);
-        });
+        showPromptModal(
+          { title: 'Edit Contact Name', placeholder: 'Full name', initial: existing, submitText: 'Save' },
+          newName => {
+            setLocalContactName(contactId, newName);
+            updateCardDisplayedName(contactId, newName);
+          }
+        );
         closeAllContactMenus();
-      });
+      };
       menu.appendChild(btnEdit);
     }
   
-    // Add Contact: shown when item.added === false OR not present in local added map
-    const serverSaysAdded = !!item.added; // server-provided flag (best-effort)
-    const locallyAdded = isContactAddedLocal(contactId);
-    if (!isSelf && (!serverSaysAdded && !locallyAdded)) {
+    // --- 3. Add Contact ---
+    const serverAdded = !!item.added;
+    const localAdded = isContactAddedLocal(contactId);
+    if (!isSelf && !serverAdded && !localAdded) {
       const btnAdd = makeBtn('Add Contact');
       btnAdd.style.fontWeight = '600';
-      btnAdd.addEventListener('click', async (e) => {
+      btnAdd.onclick = async e => {
         e.stopPropagation();
-        // ask for name (local only)
-        showPromptModal({ title: 'Add Contact', placeholder: 'Name to save for this contact', initial: item.name || '', submitText: 'Add' }, async (name) => {
-          // save local name
-          setLocalContactName(contactId, name);
-          updateCardDisplayedName(contactId, name);
-  
-          // attempt to notify server (best-effort)
-          try {
-            // server may accept {contacts: [{contact, name}]}
-            const resp = await fetch('/api/contacts_add', {
-              method: 'POST',
-              headers: {'Content-Type':'application/json'},
-              body: JSON.stringify({ contacts: [{ contact: contactId, name }] }),
-              credentials: 'same-origin'
-            });
-            if (resp.ok) {
+        showPromptModal(
+          { title: 'Add Contact', placeholder: 'Enter name', initial: item.name || '', submitText: 'Add' },
+          async name => {
+            setLocalContactName(contactId, name);
+            updateCardDisplayedName(contactId, name);
+            try {
+              const resp = await fetch('/api/contacts_add', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ contacts: [{ contact: contactId, name }] }),
+                credentials: 'same-origin'
+              });
               markContactAddedLocal(contactId);
-              // optional small UI feedback
-              const t = document.createElement('div');
-              t.textContent = 'Contact added';
-              t.style.cssText = 'position:fixed;left:50%;transform:translateX(-50%);bottom:150px;background:#0f172a;color:#fff;padding:8px 12px;border-radius:8px;z-index:6001';
-              document.body.appendChild(t);
-              setTimeout(()=> t.remove(), 2000);
-            } else {
-              // fallback: mark locally added anyway
+              if (resp.ok) showToast('Contact added');
+            } catch {
               markContactAddedLocal(contactId);
             }
-          } catch (err) {
-            // offline / error -> still mark locally
-            markContactAddedLocal(contactId);
           }
-        });
+        );
         closeAllContactMenus();
-      });
+      };
       menu.appendChild(btnAdd);
     }
   
-    // Block button
+    // --- 4. Block ---
     const btnBlock = makeBtn('Block');
-    btnBlock.addEventListener('click', (e) => {
+    btnBlock.onclick = e => {
       e.stopPropagation();
-      if (confirm(`Block ${item.name || item.contact}?`)) {
-        card.style.opacity = '0.5';
-        // TODO: call server to block if needed
-      }
+      if (confirm(`Block ${item.name || item.contact}?`)) card.style.opacity = '0.5';
       closeAllContactMenus();
-    });
+    };
     menu.appendChild(btnBlock);
   
-    // Delete button
-    const btnDel = makeBtn('Delete Chat');
-    btnDel.className = 'danger';
+    // --- 5. Delete ---
+    const btnDel = makeBtn('Delete Chat', 'danger');
     btnDel.style.color = '#b91c1c';
-    btnDel.addEventListener('click', (e) => {
+    btnDel.onclick = e => {
       e.stopPropagation();
-      if (confirm(`Delete chat with ${item.name || item.contact}?`)) {
-        card.remove();
-        // TODO: call server to delete chat if required
-      }
+      if (confirm(`Delete chat with ${item.name || item.contact}?`)) card.remove();
       closeAllContactMenus();
-    });
+    };
     menu.appendChild(btnDel);
   
-    // position the popover near triggerBtn (keep inside viewport)
+    // --- position popover ---
     document.body.appendChild(menu);
-    const rect = triggerBtn.getBoundingClientRect();
+    const rect = card.querySelector('.contact-menu-btn')?.getBoundingClientRect() || card.getBoundingClientRect();
     const menuW = Math.min(menu.offsetWidth || 220, window.innerWidth - 16);
     let left = rect.right - menuW + 8;
     left = Math.max(8, Math.min(left, window.innerWidth - menuW - 8));
     const top = rect.bottom + window.scrollY + 8;
-    menu.style.left = left + 'px';
-    menu.style.top = top + 'px';
+    Object.assign(menu.style, { left: `${left}px`, top: `${top}px`, opacity: '0', transform: 'translateY(-6px)' });
+    requestAnimationFrame(() => {
+      menu.style.transition = 'opacity .18s ease, transform .18s ease';
+      menu.style.opacity = '1';
+      menu.style.transform = 'translateY(0)';
+    });
   
-    // animate in
-    menu.style.opacity = '0';
-    menu.style.transform = 'translateY(-6px)';
-    requestAnimationFrame(()=> { menu.style.transition = 'opacity .18s ease, transform .18s ease'; menu.style.opacity = '1'; menu.style.transform = 'translateY(0)'; });
-    triggerBtn.setAttribute('aria-expanded', 'true');
-  
-    // close on outside click
-    setTimeout(()=> {
-      const onDoc = (ev) => {
-        if (!menu.contains(ev.target) && !triggerBtn.contains(ev.target)) {
+    // --- outside click closes ---
+    setTimeout(() => {
+      const onDoc = ev => {
+        if (!menu.contains(ev.target) && !card.contains(ev.target)) {
           menu.remove();
           document.removeEventListener('click', onDoc);
         }
