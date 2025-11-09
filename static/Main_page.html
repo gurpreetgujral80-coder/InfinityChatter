@@ -503,7 +503,7 @@
       contact: profile.username || profile.name || "You",
       last_text: "Message Yourself",
       last_ts: Math.floor(Date.now() / 1000),
-      avatar_url: profile.avatar_url || "https://i.pravatar.cc/150?u=selfchat"
+      avatar_url: profile.avatar_url
     };
 
     list = Array.isArray(list) ? list : [];
@@ -566,10 +566,13 @@
       const profile = JSON.parse(localStorage.getItem('infinity_profile') || '{}');
   
       card.addEventListener('click', () => {
-        const peerToken = item.peer_token || item.contact;
+        const myUsername = profile.username || profile.name || "You";
+        const isSelf = item.contact === myUsername || item.contact === "You";
+      
         const qs = new URLSearchParams();
-        qs.set('t', peerToken);
+        qs.set('t', isSelf ? 'self' : (item.peer_token || item.contact));
         if (profile && profile.name) qs.set('username', profile.name);
+      
         window.location.href = '/chat?' + qs.toString();
       });
   
