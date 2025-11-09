@@ -197,88 +197,43 @@
 
 })();
 
-(function(){
-  const tabs = document.querySelectorAll('.bottom-nav .nav-item');
+(function() {
   const routeMap = {
     chats: '/inbox',
     calls: '/calls',
     Updates: '/updates',
     settings: '/settings'
   };
-  const tabOrder = ['chats','calls','Updates','settings'];
-  const slideSpeed = 180; // ms
-  const pageCache = {}; // stores HTML for each tab
-  let currentTab = Object.keys(routeMap).find(k => location.pathname.includes(k)) || 'chats';
-  let container = document.getElementById('pageContent');
 
-  // Preload all pages in background
-  async function preloadPages(){
-    for(const [id, url] of Object.entries(routeMap)){
-      try {
-        const res = await fetch(url, {credentials:'same-origin'});
-        if(!res.ok) continue;
-        const text = await res.text();
-        const doc = new DOMParser().parseFromString(text, 'text/html');
-        const content = doc.querySelector('#pageContent')?.innerHTML || doc.body.innerHTML;
-        pageCache[id] = content;
-      } catch(e){ console.warn('Preload fail', id, e); }
+  // Inject bounce animation style
+  const style = document.createElement('style');
+  style.textContent = `
+    @keyframes navBounce {
+      0%   { transform: scale(1); }
+      30%  { transform: scale(1.25); }
+      60%  { transform: scale(0.9); }
+      100% { transform: scale(1); }
     }
-  }
-  preloadPages();
-
-  async function slideToPage(targetId){
-    if(targetId === currentTab) return;
-    const targetHtml = pageCache[targetId];
-    const targetIndex = tabOrder.indexOf(targetId);
-    const currentIndex = tabOrder.indexOf(currentTab);
-    const direction = targetIndex > currentIndex ? 'right' : 'left';
-
-    // fallback: if not yet cached, load quickly
-    if(!targetHtml){
-      const res = await fetch(routeMap[targetId], {credentials:'same-origin'});
-      const text = await res.text();
-      const doc = new DOMParser().parseFromString(text, 'text/html');
-      pageCache[targetId] = doc.querySelector('#pageContent')?.innerHTML || doc.body.innerHTML;
+    .nav-bounce {
+      animation: navBounce 0.35s cubic-bezier(.28,1.25,.47,1.03);
     }
+  `;
+  document.head.appendChild(style);
 
-    const newDiv = document.createElement('div');
-    newDiv.id = 'pageContent';
-    newDiv.innerHTML = pageCache[targetId] || '';
-    newDiv.style.position = 'absolute';
-    newDiv.style.top = '0';
-    newDiv.style.left = direction === 'right' ? '100%' : '-100%';
-    newDiv.style.width = '100%';
-    newDiv.style.transition = `transform ${slideSpeed}ms ease`;
-    container.parentElement.appendChild(newDiv);
-
-    // Animate slide
-    requestAnimationFrame(()=>{
-      container.style.transition = `transform ${slideSpeed}ms ease`;
-      container.style.transform = `translateX(${direction === 'right' ? '-100%' : '100%'})`;
-      newDiv.style.transform = `translateX(${direction === 'right' ? '-100%' : '100%'})`;
-    });
-
-    setTimeout(()=>{
-      container.remove();
-      newDiv.style.position = 'relative';
-      newDiv.style.transform = 'none';
-      currentTab = targetId;
-      container = newDiv;
-      history.pushState({}, '', routeMap[targetId]);
-    }, slideSpeed);
-  }
-
-  tabs.forEach(item=>{
-    item.addEventListener('click', e=>{
+  // Add click logic with bounce
+  document.querySelectorAll('.bottom-nav .nav-item').forEach(item => {
+    item.addEventListener('click', e => {
       e.preventDefault();
-      const id = item.dataset.id;
-      slideToPage(id);
-    });
-  });
+      item.classList.remove('nav-bounce');
+      void item.offsetWidth; // restart animation
+      item.classList.add('nav-bounce');
 
-  window.addEventListener('popstate', ()=>{
-    const id = Object.keys(routeMap).find(k => location.pathname.includes(k)) || 'chats';
-    slideToPage(id);
+      const id = item.dataset.id;
+      const target = routeMap[id];
+      if (target && window.location.pathname !== target) {
+        setTimeout(() => window.location.href = target, 250); // navigate after bounce
+      }
+    });
   });
 })();
 
