@@ -580,194 +580,219 @@
   }
 
   // --- renderContacts (stable self chat, add-button visibility, menu) ---
-  function renderContacts(list) {
-    const container = document.getElementById('contactsContainer');
-    if (!container) return;
-    container.innerHTML = '';
+function renderContacts(list) {
+  const container = document.getElementById('contactsContainer');
+  if (!container) return;
+  container.innerHTML = '';
 
-    const addBox = document.getElementById('addContactsBox');
+  const addBox = document.getElementById('addContactsBox');
+  const profile = JSON.parse(localStorage.getItem('infinity_profile') || '{}');
+  const userLabel = profile.name || profile.username || 'You';
 
-    // profile already read above
-    const userLabel = profile.name || profile.username || 'You';
-    const selfContact = {
-      name: `${userLabel} (You)`,
-      contact: 'self',
-      last_text: 'Message Yourself',
-      last_ts: Math.floor(Date.now() / 1000),
-      avatar_url: profile.avatar_url || ''
-    };
+  // --- build self chat contact ---
+  const selfContact = {
+    name: `${userLabel} (You)`,
+    contact: 'self',
+    last_text: 'Message Yourself',
+    last_ts: Math.floor(Date.now() / 1000),
+    avatar_url: profile.avatar_url || ''
+  };
 
-    list = Array.isArray(list) ? [...list] : [];
+  list = Array.isArray(list) ? [...list] : [];
 
-    // ensure self exists (only once)
-    if (!list.some(c => (c.contact||'').toString().toLowerCase() === 'self')) list.push(selfContact);
+  // ensure self exists once
+  if (!list.some(c => (c.contact || '').toLowerCase() === 'self')) list.push(selfContact);
 
-    // sort by timestamp desc
-    list.sort((a,b) => (b.last_ts || 0) - (a.last_ts || 0));
+  // sort newest first
+  list.sort((a, b) => (b.last_ts || 0) - (a.last_ts || 0));
 
-    // toggle add UI: show big addBox only when there is only self
-    if (list.length <= 1) {
-      if (addBox) addBox.style.display = 'flex';
-      removeHeaderAddButton();
-    } else {
-      if (addBox) addBox.style.display = 'none';
-      ensureHeaderAddButton();
-    }
+  // show Add UI only when only self exists
+  if (list.length <= 1) {
+    if (addBox) addBox.style.display = 'flex';
+    removeHeaderAddButton();
+  } else {
+    if (addBox) addBox.style.display = 'none';
+    ensureHeaderAddButton();
+  }
 
-    // render cards
-    list.forEach(item => {
-      const card = document.createElement('div');
-      card.className = 'contact-card';
-      card.style.position = 'relative';
-      card.style.display = 'flex';
-      card.style.alignItems = 'center';
-      card.style.gap = '12px';
-      card.style.padding = '10px';
-      card.dataset.contact = item.contact || '';
+  // helper: generate random alphanumeric
+  const randAlnum = (len) => {
+    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+    let out = '';
+    for (let i = 0; i < len; i++) out += chars.charAt(Math.floor(Math.random() * chars.length));
+    return out;
+  };
 
-      const avatarHtml = item.avatar_url
-        ? `<img src="${escapeHtml(item.avatar_url)}" style="width:56px;height:56px;object-fit:cover;border-radius:8px;">`
-        : `<div style="width:56px;height:56px;display:flex;align-items:center;justify-content:center;background:#e6eef7;border-radius:8px;font-weight:700;color:#0f172a">${escapeHtml((item.name||'?')[0]||'?')}</div>`;
+  // load or init contact-token maps
+  let contactTokens = {};
+  try { contactTokens = JSON.parse(localStorage.getItem('contact_tokens') || '{}') || {}; } catch { contactTokens = {}; }
 
-      card.innerHTML = `
-        <div class="contact-avatar">${avatarHtml}</div>
-        <div style="flex:1;min-width:0">
-          <div style="font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
-            ${escapeHtml(item.name || item.contact)}
-          </div>
-          <div style="color:#64748b;font-size:0.9rem;margin-top:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
-            ${escapeHtml(item.last_text || '')}
-          </div>
+  list.forEach(item => {
+    const card = document.createElement('div');
+    card.className = 'contact-card';
+    card.style.cssText = 'display:flex;align-items:center;gap:12px;padding:10px;position:relative;';
+
+    const avatarHtml = item.avatar_url
+      ? `<img src="${escapeHtml(item.avatar_url)}" style="width:56px;height:56px;object-fit:cover;border-radius:8px;">`
+      : `<div style="width:56px;height:56px;display:flex;align-items:center;justify-content:center;background:#e6eef7;border-radius:8px;font-weight:700;color:#0f172a">
+           ${escapeHtml((item.name || '?')[0])}
+         </div>`;
+
+    card.innerHTML = `
+      <div class="contact-avatar">${avatarHtml}</div>
+      <div style="flex:1;min-width:0">
+        <div style="font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
+          ${escapeHtml(item.name || item.contact)}
         </div>
-        <div style="display:flex;align-items:center;gap:8px">
-          <div style="color:#94a3b8;font-size:0.85rem;white-space:nowrap">${item.last_ts ? new Date(item.last_ts*1000).toLocaleString() : ''}</div>
-          <button class="contact-menu-btn" title="Options" aria-haspopup="true" aria-expanded="false" style="background:none;border:none;padding:6px;cursor:pointer">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <circle cx="12" cy="5" r="1"></circle><circle cx="12" cy="12" r="1"></circle><circle cx="12" cy="19" r="1"></circle>
-            </svg>
-          </button>
+        <div style="color:#64748b;font-size:0.9rem;margin-top:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
+          ${escapeHtml(item.last_text || '')}
         </div>
-      `;
+      </div>
+      <div style="display:flex;align-items:center;gap:8px">
+        <div style="color:#94a3b8;font-size:0.85rem;white-space:nowrap">
+          ${item.last_ts ? new Date(item.last_ts * 1000).toLocaleString() : ''}
+        </div>
+        <button class="contact-menu-btn" title="Options" aria-haspopup="true" aria-expanded="false"
+          style="background:none;border:none;padding:6px;cursor:pointer">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+            stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="5" r="1"></circle>
+            <circle cx="12" cy="12" r="1"></circle>
+            <circle cx="12" cy="19" r="1"></circle>
+          </svg>
+        </button>
+      </div>
+    `;
 
+    // --- click: open chat ---
     card.addEventListener('click', (e) => {
-      // defensive
-      e.preventDefault?.();
-      e.stopPropagation?.();
-      if (typeof e.stopImmediatePropagation === 'function') e.stopImmediatePropagation();
-    
-      // ignore menu button clicks
-      if (e.target.closest && e.target.closest('.contact-menu-btn')) return;
-    
-      const profileLocal = JSON.parse(localStorage.getItem('infinity_profile') || '{}');
-      const username = (profileLocal.username || profileLocal.name || '').toString();
-    
-      // helpers
-      const randAlnum = (len) => {
-        const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-        let out = '';
-        for (let i=0;i<len;i++) out += chars.charAt(Math.floor(Math.random()*chars.length));
-        return out;
-      };
-    
-      // load or initialize contact token map
-      let contactTokens = {};
-      try { contactTokens = JSON.parse(localStorage.getItem('contact_tokens') || '{}') || {}; } catch(e){ contactTokens = {}; }
-    
-      // compute token
-      let t = null;
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.target.closest('.contact-menu-btn')) return;
+
+      const username = (profile.username || profile.name || '').toString();
       const peerRaw = item.peer_token || item.contact || '';
       const isSelf = (item.contact === 'self') || (peerRaw === 'self') || (peerRaw === username);
-    
+
+      let t;
       if (isSelf) {
-        // self token: 20 alnum + "self"
         let selfToken = localStorage.getItem('self_chat_token');
         if (!selfToken) {
-          const code20 = randAlnum(20);
-          selfToken = code20 + 'self';
+          selfToken = randAlnum(20) + 'self';
           localStorage.setItem('self_chat_token', selfToken);
         }
         t = selfToken;
       } else {
-        // non-self: prefer existing peer_token if it looks like a 25-char alnum token
         if (peerRaw && /^[A-Za-z0-9]{25}$/.test(peerRaw)) {
           t = peerRaw;
         } else {
-          // check persisted mapping for this contact id (use contact string as key)
           const key = (item.contact || '').toString();
-          if (key && contactTokens[key]) {
-            t = contactTokens[key];
-          } else {
-            // generate a new 25-char code and persist it
-            const new25 = randAlnum(25);
-            if (key) {
-              contactTokens[key] = new25;
-              try { localStorage.setItem('contact_tokens', JSON.stringify(contactTokens)); } catch(e){ /* ignore */ }
-            }
-            t = new25;
-          }
+          t = contactTokens[key] || randAlnum(25);
+          contactTokens[key] = t;
+          localStorage.setItem('contact_tokens', JSON.stringify(contactTokens));
         }
       }
-    
-      if (!t) {
-        console.warn('No token generated for contact', item);
-        return; // avoid opening chat with empty token (prevents redirect to main page)
-      }
-    
+
       const qs = new URLSearchParams();
       qs.set('t', t);
-      if (profileLocal && profileLocal.name) qs.set('username', profileLocal.name);
-    
-      console.log('Navigating to chat with token:', t);
+      if (profile.name) qs.set('username', profile.name);
+      console.log('→ opening chat', t);
       window.location.assign('/chat?' + qs.toString());
     });
-  }
 
-  // expose renderContacts for debug/console
-  window.renderContacts = renderContacts;
-  window.__infinity = window.__infinity || {};
-  window.__infinity.closeContactMenus = closeAllContactMenus;
-
-  // --- nav bindings (simple direct navigation) ---
-  function bindNav(){
-    // remove existing handlers by cloning nodes (defensive)
-    ['nav-calls','nav-Updates','nav-chats','nav-settings'].forEach(id=>{
-      const el = document.getElementById(id);
-      if (el) {
-        const clone = el.cloneNode(true);
-        el.parentNode.replaceChild(clone, el);
-      }
-    });
-
-    const map = {
-      'nav-calls': '/calls',
-      'nav-Updates': '/Updates',
-      'nav-chats': '/inbox',
-      'nav-settings': '/settings'
-    };
-    Object.keys(map).forEach(id=>{
-      const el = document.getElementById(id);
-      if (!el) return;
-      el.addEventListener('click', ()=> { window.location.href = map[id]; });
-    });
-
-    // also attach generic bottom-nav .nav-item listeners (if present)
-    document.querySelectorAll('.bottom-nav .nav-item').forEach(item=>{
-      item.addEventListener('click', (e)=>{
-        e.preventDefault();
-        const id = (item.dataset.id || '').toString();
-        const route = {
-          chats: '/inbox', calls: '/calls', Updates: '/Updates', settings: '/settings'
-        }[id] || '/inbox';
-        window.location.href = route;
+    // --- 3-dot popover menu ---
+    const menuBtn = card.querySelector('.contact-menu-btn');
+    if (menuBtn) {
+      menuBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        toggleContactMenu(card, item);
       });
-    });
+    }
+
+    container.appendChild(card);
+  });
+}
+
+// --- Fix popover positioning ---
+function toggleContactMenu(card, item) {
+  const existing = card.querySelector('.contact-popover');
+  if (existing) {
+    existing.classList.remove('show');
+    setTimeout(() => existing.remove(), 200);
+    return;
   }
-  bindNav();
+  closeAllContactMenus();
 
-  // initial load
-  loadContacts();
+  const menu = document.createElement('div');
+  menu.className = 'contact-popover';
+  menu.style.cssText = `
+    position:absolute;
+    top:50px; right:10px;
+    background:rgba(255,255,255,0.7);
+    backdrop-filter:blur(12px);
+    border-radius:10px;
+    box-shadow:0 4px 12px rgba(0,0,0,0.15);
+    overflow:hidden;
+    transform:scale(0.8);
+    opacity:0;
+    transition:all 0.2s ease;
+    z-index:100;
+  `;
+  menu.innerHTML = `
+    <button data-action="open">Open Chat</button>
+    <button data-action="block">Block</button>
+    <button data-action="delete" class="danger">Delete Chat</button>
+  `;
 
-})();
+  card.appendChild(menu);
+  setTimeout(() => { menu.style.transform = 'scale(1)'; menu.style.opacity = '1'; }, 10);
+
+  const closeMenu = () => { menu.style.opacity = '0'; menu.style.transform = 'scale(0.8)'; setTimeout(() => menu.remove(), 180); };
+
+  menu.querySelector('[data-action="open"]').onclick = e => { e.stopPropagation(); card.click(); closeMenu(); };
+  menu.querySelector('[data-action="block"]').onclick = e => {
+    e.stopPropagation();
+    if (confirm(`Block ${item.name || item.contact}?`)) { card.style.opacity = '0.5'; alert('Contact blocked (demo).'); }
+    closeMenu();
+  };
+  menu.querySelector('[data-action="delete"]').onclick = e => {
+    e.stopPropagation();
+    if (confirm(`Delete chat with ${item.name || item.contact}?`)) { card.remove(); }
+    closeMenu();
+  };
+
+  document.addEventListener('click', (ev) => {
+    if (!menu.contains(ev.target) && !card.querySelector('.contact-menu-btn').contains(ev.target)) closeMenu();
+  }, { once: true });
+}
+
+function closeAllContactMenus() {
+  document.querySelectorAll('.contact-popover').forEach(p => p.remove());
+}
+
+// --- nav bindings ---
+function bindNav() {
+  const routes = {
+    'nav-calls': '/calls',
+    'nav-Updates': '/Updates',
+    'nav-chats': '/inbox',
+    'nav-settings': '/settings'
+  };
+  Object.entries(routes).forEach(([id, path]) => {
+    const el = document.getElementById(id);
+    if (el) el.onclick = () => { window.location.href = path; };
+  });
+}
+bindNav();
+
+// expose for console testing
+window.renderContacts = renderContacts;
+window.__infinity = window.__infinity || {};
+window.__infinity.closeContactMenus = closeAllContactMenus;
+
+// initial contact load
+loadContacts();
+
 
 // === InfinityChatter: exact header UI + iOS nav style + corrected nav routing ===
 (function() {
