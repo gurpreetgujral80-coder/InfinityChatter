@@ -46,10 +46,6 @@
 <script>
 
 (function(){
-  // ensure user has local profile
-  const profile = JSON.parse(localStorage.getItem('infinity_profile')||'{}');
-  if(!profile.name){ window.location.href = '/login'; return; }
-  document.getElementById('myNameHeader').textContent = profile.name || '';
   document.getElementById('nav-calls').addEventListener('click', ()=> window.location.href='/calls');
   document.getElementById('nav-Updates').addEventListener('click', ()=> window.location.href='/Updates');
   document.getElementById('nav-chats').addEventListener('click', ()=> window.location.href='/inbox');
