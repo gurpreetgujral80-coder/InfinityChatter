@@ -33,11 +33,8 @@
       </div>
   </header>
   
-  <div id="pageContent" style="padding-top:84px; min-height:60vh;">
+  <div id="pageContent" style="min-height:60vh;">
     <main class="inbox-main">
-      <div id="contactsContainer">
-        <div style="padding:18px;color:#64748b">Loading contacts…</div>
-      </div>
     </main>
   </div>
   
@@ -49,101 +46,10 @@
   </div>
 <script>
 (function(){
-  // ensure user has local profile
-  const profile = JSON.parse(localStorage.getItem('infinity_profile')||'{}');
-  if(!profile.name){ window.location.href = '/login'; return; }
-  document.getElementById('myNameHeader').textContent = profile.name || '';
-
-  // helper escape
-  function escapeHtml(s){ return (s||'').toString().replace(/[&<>"']/g, c=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
-
-  async function loadContacts(){
-    try {
-      const resp = await fetch('/contacts_list', { credentials: 'same-origin' });
-      if(!resp.ok) throw new Error('failed');
-      const data = await resp.json();
-      renderContacts(data.contacts || []);
-    } catch (err) {
-      document.getElementById('contactsContainer').innerHTML = '<div style="padding:18px;color:#c00">Unable to load contacts</div>';
-      console.error('loadContacts', err);
-    }
-  }
-
-  function ensureHeaderAddButton() {
-      // check if the button already exists
-      if (document.getElementById('headerAddBtn')) return;
-    
-      // find your header
-      const header = document.querySelector('header');
-      if (!header) return;
-    
-      // create the + button
-      const btn = document.createElement('button');
-      btn.id = 'headerAddBtn';
-      btn.textContent = '+';
-      btn.title = 'Add Contact';
-      btn.style.cssText = `
-        position:absolute;
-        right:18px;
-        top:14px;
-        width:38px;
-        height:38px;
-        border-radius:50%;
-        background:#0f172a;
-        color:#fff;
-        font-size:24px;
-        border:none;
-        cursor:pointer;
-        box-shadow:0 3px 8px rgba(0,0,0,0.1);
-        display:flex;
-        align-items:center;
-        justify-content:center;
-      `;
-      btn.addEventListener('click', openAddContactsModal); // reuse same modal function
-      header.appendChild(btn);
-  }
-
-  function renderContacts(list){
-      const container = document.getElementById('contactsContainer');
-      container.innerHTML = '';
-    
-      const addBox = document.getElementById('addContactsBox');
-    
-      if(!list.length){
-        // No contacts → show Add Contacts box and remove header button if present
-        container.innerHTML = '<div style="padding:18px;color:#64748b">No contacts yet</div>';
-        if (addBox) addBox.style.display = 'flex';
-        const headerBtn = document.getElementById('headerAddBtn');
-        if (headerBtn) headerBtn.remove();
-        return;
-      }
-
-        // At least one contact → hide big Add box and add header button
-        if (addBox) addBox.style.display = 'none';
-        ensureHeaderAddButton();
-
-    
-      list.forEach(item=>{
-        const card = document.createElement('div');
-        card.className = 'contact-card';
-        card.innerHTML = `
-          <div class="contact-avatar">${ item.avatar_url ? '<img src="'+escapeHtml(item.avatar_url)+'" style="width:56px;height:56px;object-fit:cover;border-radius:8px;">' : escapeHtml((item.name||'')[0]||'?') }</div>
-          <div style="flex:1">
-            <div style="font-weight:700">${escapeHtml(item.name || item.contact)}</div>
-            <div style="color:#64748b;font-size:0.9rem;margin-top:6px">${escapeHtml(item.last_text||'')}</div>
-          </div>
-          <div style="color:#94a3b8;font-size:0.85rem">${item.last_ts?new Date(item.last_ts*1000).toLocaleString():''}</div>`;
-        card.addEventListener('click', ()=> window.location.href = '/chat?peer=' + encodeURIComponent(item.contact));
-        container.appendChild(card);
-      });
-  }
-
   document.getElementById('nav-calls').addEventListener('click', ()=> window.location.href='/calls');
   document.getElementById('nav-Updates').addEventListener('click', ()=> window.location.href='/Updates');
   document.getElementById('nav-chats').addEventListener('click', ()=> window.location.href='/inbox');
   document.getElementById('nav-settings').addEventListener('click', ()=> window.location.href='/settings');
-
-  loadContacts();
 })();
 // === InfinityChatter: exact header UI + iOS nav style + corrected nav routing ===
 (function() {
