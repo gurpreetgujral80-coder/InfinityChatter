@@ -494,33 +494,35 @@
 
   function renderContacts(list) {
     const container = document.getElementById('contactsContainer');
+    if (!container) return;
     container.innerHTML = '';
-
+  
     const addBox = document.getElementById('addContactsBox');
     const profile = JSON.parse(localStorage.getItem('infinity_profile') || '{}');
     const userLabel = profile.name || profile.username || 'You';
+  
+    // ✅ Always ensure a stable self-contact
     const selfContact = {
       name: `${userLabel} (You)`,
-      contact: profile.username || profile.name || "self",
-      last_text: "Message Yourself",
+      contact: 'self',
+      last_text: 'Message Yourself',
       last_ts: Math.floor(Date.now() / 1000),
-      avatar_url: profile.avatar_url
+      avatar_url: profile.avatar_url || ''
     };
-
-    list = Array.isArray(list) ? list : [];
-    
-    // Add it only if it's not already in list
-    const alreadyHasSelf = list.some(c =>
-      (c.contact || '').toString() === (selfContact.contact || '').toString()
-    );
-    
-    if (!alreadyHasSelf) list.push(selfContact);
-    
-    // Sort all contacts by last message timestamp (latest first)
+  
+    list = Array.isArray(list) ? [...list] : [];
+  
+    // ✅ Add self-chat if missing
+    if (!list.some(c => (c.contact || '') === 'self')) {
+      list.push(selfContact);
+    }
+  
+    // ✅ Sort contacts (latest first)
     list.sort((a, b) => (b.last_ts || 0) - (a.last_ts || 0));
   
+    // ✅ Show “No contacts yet” and Add box only if 1 contact (self)
     if (list.length < 2) {
-      container.innerHTML = '<div style="padding:18px;color:#64748b">No contacts yet</div>';
+      container.innerHTML = `<div style="padding:18px;color:#64748b">No contacts yet</div>`;
       if (addBox) addBox.style.display = 'flex';
       const headerBtn = document.getElementById('headerAddBtn');
       if (headerBtn) headerBtn.remove();
@@ -530,16 +532,18 @@
     if (addBox) addBox.style.display = 'none';
     ensureHeaderAddButton();
   
+    // ✅ Render each contact card
     list.forEach(item => {
       const card = document.createElement('div');
       card.className = 'contact-card';
       card.style.position = 'relative';
+  
       card.innerHTML = `
         <div class="contact-avatar">
           ${
             item.avatar_url
               ? `<img src="${escapeHtml(item.avatar_url)}" style="width:56px;height:56px;object-fit:cover;border-radius:8px;">`
-              : escapeHtml((item.name || '')[0] || '?')
+              : `<div style="width:56px;height:56px;display:flex;align-items:center;justify-content:center;background:#e2e8f0;border-radius:8px;font-weight:600;color:#475569;">${escapeHtml((item.name || '?')[0])}</div>`
           }
         </div>
         <div style="flex:1">
@@ -563,22 +567,19 @@
         </div>
       `;
   
-      const profile = JSON.parse(localStorage.getItem('infinity_profile') || '{}');
-  
+      // ✅ Open chat on click
       card.addEventListener('click', () => {
-        const myUsername = profile.username || profile.name || "You";
-        const isSelf = item.contact === myUsername || item.contact === "self";
-      
+        const isSelf = item.contact === 'self';
         const qs = new URLSearchParams();
         qs.set('t', isSelf ? 'self' : (item.peer_token || item.contact));
         if (profile && profile.name) qs.set('username', profile.name);
-      
         window.location.href = '/chat?' + qs.toString();
       });
   
+      // ✅ Menu button logic
       const menuBtn = card.querySelector('.contact-menu-btn');
       if (menuBtn) {
-        menuBtn.addEventListener('click', (e) => {
+        menuBtn.addEventListener('click', e => {
           e.stopPropagation();
           toggleContactMenu(card, item);
         });
