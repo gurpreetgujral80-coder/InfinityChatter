@@ -1188,6 +1188,34 @@
   });
 })();
 
+(function() {
+  async function openChatPage(token, username) {
+    try {
+      const res = await fetch(`/chat?t=${encodeURIComponent(token)}&username=${encodeURIComponent(username)}`, {
+        credentials: 'same-origin'
+      });
+      const html = await res.text();
+      
+      // Extract only <body> content to avoid duplicating headers/nav
+      const temp = document.createElement('div');
+      temp.innerHTML = html;
+      const newContent = temp.querySelector('#chatContainer') || temp.querySelector('main') || temp;
+
+      // Replace main content area
+      const appRoot = document.getElementById('main') || document.body;
+      appRoot.innerHTML = newContent.innerHTML;
+
+      console.log('✅ Self chat loaded dynamically');
+    } catch (err) {
+      console.error('⚠️ Failed to load self chat dynamically:', err);
+      window.location.assign(`/chat?t=${encodeURIComponent(token)}&username=${encodeURIComponent(username)}`);
+    }
+  }
+
+  // Expose globally for use in click handler
+  window.openChatPage = openChatPage;
+})();
+
 </script>
 </body>
 </html>
