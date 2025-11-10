@@ -926,7 +926,15 @@ def invite_landing(token):
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Join InfinityChatter</title>
-  <link rel="icon" type="image/png" href="/static/favicon.png">
+  <link rel="icon" href="/static/favicon.png" type="image/png">
+  <link rel="apple-touch-icon" href="/static/favicon.png">
+  <link rel="shortcut icon" href="/static/favicon.png">
+  <link rel="manifest" href="/static/manifest.json">
+  <meta name="theme-color" content="#0f172a">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="InfinityChatter">
+  <meta name="mobile-web-app-capable" content="yes">
   <script src="https://cdn.tailwindcss.com"></script>
   <link href="https://fonts.googleapis.com/css2?family=Pacifico&family=Poppins:wght@400;600&display=swap" rel="stylesheet">
 </head>
@@ -1487,7 +1495,15 @@ AUDIO_CALL_HTML = r"""
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Audio Call — InfinityChatter</title>
-  <link rel="icon" type="image/png" href="/static/favicon.png">
+  <link rel="icon" href="/static/favicon.png" type="image/png">
+  <link rel="apple-touch-icon" href="/static/favicon.png">
+  <link rel="shortcut icon" href="/static/favicon.png">
+  <link rel="manifest" href="/static/manifest.json">
+  <meta name="theme-color" content="#0f172a">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="InfinityChatter">
+  <meta name="mobile-web-app-capable" content="yes">
   <style>
     :root{--bg:#0b1320;--panel:#0f1b2b;--accent:#25D366;--muted:#b6c2cf}
     html,body{height:100%;margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,"Helvetica Neue",Arial}
@@ -1713,7 +1729,15 @@ AVATAR_CREATE_HTML = r'''<!-- AVATAR_CREATE_HTML (updated) -->
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
 <title>Create Avatar - InfinityChatter</title>
-<link rel="icon" type="image/png" href="/static/favicon.png">
+<link rel="icon" href="/static/favicon.png" type="image/png">
+<link rel="apple-touch-icon" href="/static/favicon.png">
+<link rel="shortcut icon" href="/static/favicon.png">
+<link rel="manifest" href="/static/manifest.json">
+<meta name="theme-color" content="#0f172a">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="InfinityChatter">
+<meta name="mobile-web-app-capable" content="yes">
 <script src="https://cdn.tailwindcss.com"></script>
 <style>
   body{font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial; background: #f8fafc; padding:18px;}
@@ -1952,7 +1976,15 @@ LOGIN_HTML = r'''<!doctype html>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>InfinityChatter — Login</title>
-  <link rel="icon" type="image/png" href="/static/favicon.png">
+  <link rel="icon" href="/static/favicon.png" type="image/png">
+  <link rel="apple-touch-icon" href="/static/favicon.png">
+  <link rel="shortcut icon" href="/static/favicon.png">
+  <link rel="manifest" href="/static/manifest.json">
+  <meta name="theme-color" content="#0f172a">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="InfinityChatter">
+  <meta name="mobile-web-app-capable" content="yes">
   <script src="https://cdn.tailwindcss.com"></script>
   <style>
     body { background:linear-gradient(135deg,#eff6ff,#f5f3ff); display:flex; align-items:center; justify-content:center; height:100vh; font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,"Helvetica Neue",Arial; }
@@ -2018,7 +2050,15 @@ LOGIN_HTML = r'''<!doctype html>
 AVATAR_HTML = r'''<!doctype html>
 <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1" />
 <title>Create Avatar — InfinityChatter</title>
-<link rel="icon" type="image/png" href="/static/favicon.png">
+<link rel="icon" href="/static/favicon.png" type="image/png">
+<link rel="apple-touch-icon" href="/static/favicon.png">
+<link rel="shortcut icon" href="/static/favicon.png">
+<link rel="manifest" href="/static/manifest.json">
+<meta name="theme-color" content="#0f172a">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="InfinityChatter">
+<meta name="mobile-web-app-capable" content="yes">
 <script src="https://cdn.tailwindcss.com"></script>
 <style>
   body{ font-family: Inter, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial; padding:12px; background:#f8fafc; }
@@ -2245,7 +2285,15 @@ CHAT_HTML = r'''<!doctype html>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>InfinityChatter — Chat</title>
-  <link rel="icon" type="image/png" href="/static/favicon.png">
+  <link rel="icon" href="/static/favicon.png" type="image/png">
+  <link rel="apple-touch-icon" href="/static/favicon.png">
+  <link rel="shortcut icon" href="/static/favicon.png">
+  <link rel="manifest" href="/static/manifest.json">
+  <meta name="theme-color" content="#0f172a">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="InfinityChatter">
+  <meta name="mobile-web-app-capable" content="yes">
   <script src="https://cdn.tailwindcss.com"></script>
 
   <!-- emoji-mart v5 browser build (exposes global EmojiMart for vanilla JS) -->
