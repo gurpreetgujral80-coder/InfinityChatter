@@ -739,10 +739,11 @@
         </div>
       `;
   
+      // Inside your card.addEventListener('click', ...)
       card.addEventListener('click', async (e) => {
-        if (e.target.closest('.contact-menu-btn')) return;
         e.preventDefault();
         e.stopPropagation();
+        if (e.target.closest('.contact-menu-btn')) return;
       
         const profileLocal = JSON.parse(localStorage.getItem('infinity_profile') || '{}');
         const username = (profileLocal.username || profileLocal.name || 'you').toString();
@@ -752,7 +753,7 @@
       
         const randAlnum = (len) => {
           const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-          return Array.from({ length: len }, () => chars.charAt(Math.floor(Math.random() * chars.length))).join('');
+          return Array.from({length: len}, () => chars.charAt(Math.floor(Math.random() * chars.length))).join('');
         };
       
         let t = null;
@@ -763,9 +764,24 @@
             localStorage.setItem('__self_chat_token', selfToken);
           }
           t = selfToken;
+      
+          // ✅ Ensure session before navigating
+          try {
+            const res = await fetch('/api/set_session', {
+              method: 'POST',
+              headers: {'Content-Type': 'application/json'},
+              body: JSON.stringify({ username }),
+              credentials: 'same-origin'
+            });
+            const j = await res.json().catch(() => ({}));
+            console.log('✅ Session set response:', j);
+          } catch (err) {
+            console.warn('⚠️ set_session failed', err);
+          }
         } else {
           let contactTokens = {};
           try { contactTokens = JSON.parse(localStorage.getItem('contact_tokens') || '{}'); } catch { contactTokens = {}; }
+      
           const key = contactId;
           if (contactTokens[key] && /^[A-Za-z0-9]{25}$/.test(contactTokens[key])) {
             t = contactTokens[key];
@@ -777,24 +793,14 @@
           }
         }
       
-        const chatUrl = `/chat?t=${encodeURIComponent(t)}&username=${encodeURIComponent(username)}`;
-        console.log('✅ Chat debug info:', { contactId, isSelf, token: t, url: chatUrl });
+        const qs = new URLSearchParams();
+        qs.set('t', t);
+        if (profileLocal && profileLocal.name) qs.set('username', profileLocal.name);
       
-        // --- fix: set session before redirect ---
-        if (isSelf) {
-          try {
-            await fetch('/api/set_session', {
-              method: 'POST',
-              headers: {'Content-Type': 'application/json'},
-              body: JSON.stringify({ username })
-            });
-          } catch (err) {
-            console.warn('Session set failed (offline?)', err);
-          }
-        }
+        console.log('✅ Chat debug info:', { contactId, isSelf, token: t, url: '/chat?' + qs.toString() });
       
-        // Always open via normal redirect
-        window.location.href = chatUrl;
+        // 🚀 Redirect only after ensuring session is active
+        window.location.href = '/chat?' + qs.toString();
       });
   
       // MENU BUTTON (placeholder)
