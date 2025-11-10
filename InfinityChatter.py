@@ -7785,22 +7785,24 @@ def api_set_session():
     if not username:
         return jsonify({"error": "missing username"}), 400
 
-    # Save username to Flask session
+    # Store username in Flask session
     flask_session["username"] = username
     current_app.logger.info(f"✅ Session set for {username}")
 
-    # Let Flask sign & generate cookie automatically
+    # Let Flask handle cookie creation automatically
     resp = make_response(jsonify({"ok": True, "session_username": username}))
-    # Force proper cross-site cookie behavior
+
+    # Explicitly set attributes to ensure cross-site availability (Render, iOS Safari, etc.)
     resp.set_cookie(
-        app.config.get("SESSION_COOKIE_NAME", "session"),
-        value=flask_session.sid if hasattr(flask_session, "sid") else None,  # optional
+        key=app.config.get("SESSION_COOKIE_NAME", "session"),
+        value=request.cookies.get(app.config.get("SESSION_COOKIE_NAME", "session"), ""),  # fallback empty string
         samesite="None",
         secure=True,
         httponly=True,
         path="/",
         domain=".onrender.com"
     )
+
     return resp
 
 @app.route('/poll')
