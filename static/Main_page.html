@@ -739,77 +739,84 @@
         </div>
       `;
   
-      // CLICK to open chat (ignore menu clicks)
-      card.addEventListener('click', (e) => {
-        if (e.target.closest && e.target.closest('.contact-menu-btn')) return; // ignore 3-dot clicks
+      card.addEventListener('click', async (e) => {
+        if (e.target.closest('.contact-menu-btn')) return; // ignore 3-dot clicks
       
-        // defensive stop (in case)
-        try { e.preventDefault(); e.stopPropagation(); } catch(_) {}
+        e.preventDefault();
+        e.stopPropagation();
       
         const profileLocal = JSON.parse(localStorage.getItem('infinity_profile') || '{}');
-        const username = (profileLocal.username || profileLocal.name || '').toString();
+        const username = (profileLocal.username || profileLocal.name || 'you').toString();
         const contactId = (item.contact || '').toString();
         const peerRaw = item.peer_token || contactId;
         const isSelf = contactId === 'self' || peerRaw === 'self' || peerRaw === username;
       
-        // helper: generate random alphanumeric
+        // helper: random alphanumeric string
         const randAlnum = (len) => {
           const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-          return Array.from({length: len}, () => chars.charAt(Math.floor(Math.random()*chars.length))).join('');
+          return Array.from({ length: len }, () => chars.charAt(Math.floor(Math.random() * chars.length))).join('');
         };
       
         let t = null;
       
         if (isSelf) {
-          // IMPORTANT: 20 alnum + "self" (no extra prefix)
-          let selfToken = localStorage.getItem('self_chat_token');
-          if (!selfToken || !/^[A-Za-z0-9]{20}self$/.test(selfToken)) {
-            const code20 = randAlnum(20);
-            selfToken = code20 + 'self';       // example: AbCd...20charsself
-            try { localStorage.setItem('self_chat_token', selfToken); } catch (err) { console.warn('ls set failed', err); }
+          // use persistent self chat token
+          let selfToken = localStorage.getItem('__self_chat_token');
+          if (!selfToken) {
+            selfToken = randAlnum(20) + 'self';
+            localStorage.setItem('__self_chat_token', selfToken);
           }
           t = selfToken;
         } else {
-          // stable 25-char token per contact
+          // normal contacts
           let contactTokens = {};
-          try { contactTokens = JSON.parse(localStorage.getItem('contact_tokens') || '{}') || {}; } catch(e){ contactTokens = {}; }
-          const key = contactId || (item.peer_token || '').toString() || ('c_' + randAlnum(6));
+          try { contactTokens = JSON.parse(localStorage.getItem('contact_tokens') || '{}'); } catch { contactTokens = {}; }
+      
+          const key = contactId;
           if (contactTokens[key] && /^[A-Za-z0-9]{25}$/.test(contactTokens[key])) {
             t = contactTokens[key];
           } else {
-            const new25 = randAlnum(25);
-            contactTokens[key] = new25;
-            try { localStorage.setItem('contact_tokens', JSON.stringify(contactTokens)); } catch (err) { console.warn('ls set failed', err); }
-            t = new25;
+            const newToken = randAlnum(25);
+            contactTokens[key] = newToken;
+            localStorage.setItem('contact_tokens', JSON.stringify(contactTokens));
+            t = newToken;
           }
         }
       
-        // final URL
-        const qs = new URLSearchParams();
-        qs.set('t', t);
-        if (profileLocal && profileLocal.name) qs.set('username', profileLocal.name);
+        if (!t) return console.warn('⚠️ No token generated for contact:', contactId);
       
-        const chatUrl = '/chat?' + qs.toString();
+        const chatUrl = `/chat?t=${encodeURIComponent(t)}&username=${encodeURIComponent(username)}`;
+      
+        // 🔥 Debug info for testing
         console.log('✅ Chat debug info:', { contactId, isSelf, token: t, url: chatUrl });
-        
+      
+        // --- Self chat: always open via normal navigation ---
         if (isSelf) {
-          // ⚡ Self chat opens inline or via history push (no full reload)
-          if (window.history && window.history.pushState) {
-            window.history.pushState({}, '', chatUrl);
-            if (typeof openChatPage === 'function') {
-              openChatPage(t, profileLocal.name); // if you have a JS chat loader
-            } else {
-              console.log('Opened self chat (no reload)');
-            }
-          } else {
-            // fallback for old browsers
-            window.location.assign(chatUrl);
+          window.location.assign(chatUrl);
+          return;
+        }
+      
+        // --- Other contacts: try fetch-based load, fallback to full redirect if needed ---
+        try {
+          const res = await fetch(chatUrl, { credentials: 'same-origin' });
+          if (res.redirected || res.url.includes('/login') || res.url.includes('/index')) {
+            window.location.assign(chatUrl); // fallback
+            return;
           }
-        } else {
-          // Normal contacts → reload as usual
+          // optional dynamic load: if you have a chat container
+          const html = await res.text();
+          if (html.includes('<title>Login') || html.includes('InfinityChatter - Login')) {
+            window.location.assign(chatUrl);
+            return;
+          }
+      
+          // dynamically load chat page if you want (optional)
+          // document.open(); document.write(html); document.close();
+          window.location.assign(chatUrl); // safer default
+        } catch (err) {
+          console.error('Chat open failed, reloading normally:', err);
           window.location.assign(chatUrl);
         }
-
       });
   
       // MENU BUTTON (placeholder)
