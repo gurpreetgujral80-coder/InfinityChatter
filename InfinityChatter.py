@@ -7768,6 +7768,16 @@ def send_message():
         app.logger.exception('send_message error')
         return jsonify({'error': str(e)}), 500
 
+@app.route("/api/set_session", methods=["POST"])
+def set_session():
+    from flask import request, jsonify, session as flask_session
+    data = request.get_json(force=True)
+    username = data.get("username")
+    if username:
+        flask_session["username"] = username
+        return jsonify({"ok": True})
+    return jsonify({"ok": False}), 400
+
 @app.route('/poll')
 @app.route('/messages')
 @app.route('/get_messages')
