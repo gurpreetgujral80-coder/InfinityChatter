@@ -61,7 +61,8 @@ app.config.update({
     "SESSION_COOKIE_SAMESITE": "None",  # allow cross-site or fetch navigation
     "SESSION_COOKIE_SECURE": True,      # required for HTTPS
     "SESSION_COOKIE_HTTPONLY": True,    # security
-    "SESSION_COOKIE_PATH": "/",          # make sure it applies to all routes
+    "SESSION_COOKIE_PATH": "/",  
+    "SESSION_COOKIE_DOMAIN": ".onrender.com",
 })
 
 PORT = int(os.environ.get("PORT", 5004))
