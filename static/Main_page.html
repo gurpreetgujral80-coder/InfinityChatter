@@ -740,8 +740,7 @@
       `;
   
       card.addEventListener('click', async (e) => {
-        if (e.target.closest('.contact-menu-btn')) return; // ignore 3-dot clicks
-      
+        if (e.target.closest('.contact-menu-btn')) return;
         e.preventDefault();
         e.stopPropagation();
       
@@ -751,16 +750,13 @@
         const peerRaw = item.peer_token || contactId;
         const isSelf = contactId === 'self' || peerRaw === 'self' || peerRaw === username;
       
-        // helper: random alphanumeric string
         const randAlnum = (len) => {
           const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
           return Array.from({ length: len }, () => chars.charAt(Math.floor(Math.random() * chars.length))).join('');
         };
       
         let t = null;
-      
         if (isSelf) {
-          // use persistent self chat token
           let selfToken = localStorage.getItem('__self_chat_token');
           if (!selfToken) {
             selfToken = randAlnum(20) + 'self';
@@ -768,10 +764,8 @@
           }
           t = selfToken;
         } else {
-          // normal contacts
           let contactTokens = {};
           try { contactTokens = JSON.parse(localStorage.getItem('contact_tokens') || '{}'); } catch { contactTokens = {}; }
-      
           const key = contactId;
           if (contactTokens[key] && /^[A-Za-z0-9]{25}$/.test(contactTokens[key])) {
             t = contactTokens[key];
@@ -783,40 +777,24 @@
           }
         }
       
-        if (!t) return console.warn('⚠️ No token generated for contact:', contactId);
-      
         const chatUrl = `/chat?t=${encodeURIComponent(t)}&username=${encodeURIComponent(username)}`;
-      
-        // 🔥 Debug info for testing
         console.log('✅ Chat debug info:', { contactId, isSelf, token: t, url: chatUrl });
       
-        // --- Self chat: always open via normal navigation ---
+        // --- fix: set session before redirect ---
         if (isSelf) {
-          window.location.assign(chatUrl);
-          return;
+          try {
+            await fetch('/api/set_session', {
+              method: 'POST',
+              headers: {'Content-Type': 'application/json'},
+              body: JSON.stringify({ username })
+            });
+          } catch (err) {
+            console.warn('Session set failed (offline?)', err);
+          }
         }
       
-        // --- Other contacts: try fetch-based load, fallback to full redirect if needed ---
-        try {
-          const res = await fetch(chatUrl, { credentials: 'same-origin' });
-          if (res.redirected || res.url.includes('/login') || res.url.includes('/index')) {
-            window.location.assign(chatUrl); // fallback
-            return;
-          }
-          // optional dynamic load: if you have a chat container
-          const html = await res.text();
-          if (html.includes('<title>Login') || html.includes('InfinityChatter - Login')) {
-            window.location.assign(chatUrl);
-            return;
-          }
-      
-          // dynamically load chat page if you want (optional)
-          // document.open(); document.write(html); document.close();
-          window.location.assign(chatUrl); // safer default
-        } catch (err) {
-          console.error('Chat open failed, reloading normally:', err);
-          window.location.assign(chatUrl);
-        }
+        // Always open via normal redirect
+        window.location.href = chatUrl;
       });
   
       // MENU BUTTON (placeholder)
