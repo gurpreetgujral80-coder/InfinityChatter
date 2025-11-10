@@ -7780,20 +7780,27 @@ def send_message():
 
 @app.route("/api/set_session", methods=["POST"])
 def api_set_session():
-    from flask import jsonify, request, session as flask_session, current_app
-
-    data = request.get_json(force=True) or {}
-    username = data.get("username")
+    data = request.get_json(force=True)
+    username = (data.get("username") or "").strip()
     if not username:
         return jsonify({"error": "missing username"}), 400
 
-    # Set Flask session value normally
+    # Save username to Flask session
     flask_session["username"] = username
-    flask_session.modified = True
+    current_app.logger.info(f"✅ Session set for {username}")
 
-    # Flask will automatically create and send the cookie
-    resp = jsonify({"ok": True, "session_username": username})
-    resp.status_code = 200
+    # Let Flask sign & generate cookie automatically
+    resp = make_response(jsonify({"ok": True, "session_username": username}))
+    # Force proper cross-site cookie behavior
+    resp.set_cookie(
+        app.config.get("SESSION_COOKIE_NAME", "session"),
+        value=flask_session.sid if hasattr(flask_session, "sid") else None,  # optional
+        samesite="None",
+        secure=True,
+        httponly=True,
+        path="/",
+        domain=".onrender.com"
+    )
     return resp
 
 @app.route('/poll')
