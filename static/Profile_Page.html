@@ -30,7 +30,12 @@
     body {
       overflow-x: hidden;
     }
-    
+    .update-item {
+      transition: transform 0.2s ease;
+    }
+    .update-item:hover {
+      transform: translateY(-3px);
+    }
   </style>
 </head>
 <body>
@@ -43,6 +48,15 @@
   </header>
   
   <div id="pageContent" style="min-height:60vh;">
+    <div id="profileAvatar"></div>
+    <div id="profileName"></div>
+    <div id="profileStatus"></div>
+    <button id="editProfileBtn">Edit Profile</button>
+    <button id="editStatusBtn">Edit Status</button>
+    <textarea id="updateText" maxlength="280"></textarea>
+    <div id="charCount">0/280</div>
+    <button id="postUpdateBtn">Post</button>
+    <div id="updatesFeed"></div>
     <main class="inbox-main">
     </main>
   </div>
