@@ -7772,26 +7772,33 @@ def send_message():
 
 @app.route("/api/set_session", methods=["POST"])
 def api_set_session():
-    from flask import jsonify, request, session as flask_session
+    from flask import jsonify, request, session as flask_session, current_app
+
     data = request.get_json(force=True) or {}
     username = data.get("username")
-
     if not username:
         return jsonify({"error": "missing username"}), 400
 
+    # store username in session
     flask_session["username"] = username
-
-    # Explicitly mark session as modified and save
     flask_session.modified = True
+
+    # Build the response
     resp = jsonify({"ok": True, "session_username": username})
+
+    # Flask 3.x: session cookie name is now in app.config
+    cookie_name = current_app.config.get("SESSION_COOKIE_NAME", "session")
+
+    # Explicitly set a secure cookie for Render + Safari
     resp.set_cookie(
-        key=app.session_cookie_name,
-        value=flask_session.sid if hasattr(flask_session, "sid") else flask_session.get("_id", "manual"),
+        cookie_name,
+        value=flask_session.get("_id", os.urandom(16).hex()),
         secure=True,
         httponly=True,
         samesite="None",
         path="/"
     )
+
     return resp
 
 @app.route('/poll')
