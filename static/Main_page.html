@@ -4,6 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>InfinityChatter</title>
+  <link rel="icon" type="image/png" href="/static/favicon.png">
   <script src="https://cdn.tailwindcss.com"></script>
   <style>
     header.inbox-header { position:fixed; top:0; left:0; right:0; height:64px; display:flex; align-items:center; justify-content:center; background: rgba(255,255,255,0.9); backdrop-filter: blur(6px); z-index:50; box-shadow:0 1px 6px rgba(0,0,0,0.04); }
@@ -774,15 +775,11 @@
         qs.set('t', t);
         if (profileLocal && profileLocal.name) qs.set('username', profileLocal.name);
       
-        console.log('✅ Chat debug info:', {
-          contactId,
-          isSelf,
-          token: t,
-          url: '/chat?' + qs.toString()
-        });
+        const url = '/chat?' + qs.toString();
+        console.log('→ Opening chat', { contactId, isSelf, token: t, url });
       
-        // TEMP: stop redirect to inspect output
-        // window.location.href = '/chat?' + qs.toString();
+        // ✅ Now actually open the chat
+        window.location.assign(url);
       });
   
       // MENU BUTTON (placeholder)
