@@ -3,9 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>InfinityChatter — Updates</title>
-
-  <!-- Favicons / PWA (your static/favicon.png) -->
+  <title>InfinityChatter</title>
   <link rel="icon" href="/static/favicon.png" type="image/png">
   <link rel="apple-touch-icon" href="/static/favicon.png">
   <link rel="shortcut icon" href="/static/favicon.png">
@@ -15,284 +13,259 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <meta name="apple-mobile-web-app-title" content="InfinityChatter">
   <meta name="mobile-web-app-capable" content="yes">
-
   <script src="https://cdn.tailwindcss.com"></script>
-
   <style>
-    :root{ --bg:#f8fafc; --muted:#64748b; --prim:#0f172a; --card:#fff; }
-    html,body{background:linear-gradient(180deg,var(--bg) 0%, #eef2ff 100%); margin:0; padding:0; font-family:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial;}
-    header.inbox-header { position:fixed; top:0; left:0; right:0; height:72px; display:flex; align-items:center; justify-content:center; background: rgba(255,255,255,0.85); backdrop-filter: blur(6px); z-index:50; box-shadow:0 1px 6px rgba(0,0,0,0.04); }
-    main.inbox-main { padding:96px 16px 110px; max-width:980px; margin:0 auto; }
-    .profile-card { display:flex; gap:14px; align-items:center; padding:14px; border-radius:14px; background:var(--card); box-shadow:0 6px 18px rgba(2,6,23,0.04); margin-bottom:14px; }
-    .profile-avatar { width:78px; height:78px; border-radius:14px; overflow:hidden; background:#eef; display:flex; align-items:center; justify-content:center; font-weight:800; color:var(--prim); font-size:28px; }
-    .profile-meta { flex:1; min-width:0; }
-    .profile-name { font-size:18px; font-weight:700; color:var(--prim); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-    .profile-status { color:var(--muted); font-size:0.95rem; margin-top:6px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-    .profile-actions { display:flex; gap:8px; align-items:center; }
-    .btn { background:var(--prim); color:white; padding:8px 12px; border-radius:10px; border:none; cursor:pointer; font-weight:600; }
-    .btn.ghost { background:transparent; color:var(--prim); border:1px solid rgba(15,23,42,0.06); }
-    .update-box { background:var(--card); padding:12px; border-radius:12px; box-shadow:0 6px 18px rgba(2,6,23,0.04); margin-bottom:12px; }
-    .updates-feed .update { background:var(--card); padding:12px; border-radius:10px; margin-bottom:10px; box-shadow:0 4px 14px rgba(2,6,23,0.03); }
-    .small { font-size:0.85rem; color:var(--muted); }
+    header.inbox-header { position:fixed; top:0; left:0; right:0; height:64px; display:flex; align-items:center; justify-content:center; background: rgba(255,255,255,0.9); backdrop-filter: blur(6px); z-index:50; box-shadow:0 1px 6px rgba(0,0,0,0.04); }
+    main.inbox-main { padding:1px 16px 5px; max-width:980px; margin:0 auto; }
+    .contact-card { display:flex; gap:12px; align-items:center; padding:12px; border-radius:12px; margin-bottom:12px; background:#fff; cursor:pointer; box-shadow:0 6px 18px rgba(2,6,23,0.04); }
+    .contact-avatar{ width:56px; height:56px; border-radius:12px; overflow:hidden; display:flex; align-items:center; justify-content:center; background:#eef; font-weight:700; }
     .bottom-nav{ position:fixed; left:50%; transform:translateX(-50%); bottom:16px; width: min(760px, calc(100% - 36px)); background: rgba(255,255,255,0.65); backdrop-filter: blur(8px); border-radius:18px; padding:8px 14px; display:flex; justify-content:space-around; align-items:center; z-index:60; }
-    .nav-item{ display:flex; flex-direction:column; align-items:center; font-size:0.9rem; color:var(--prim); cursor:pointer; padding:6px 8px; border-radius:10px; }
-    .modal-backdrop { position:fixed; inset:0; background:rgba(0,0,0,0.36); display:flex; align-items:center; justify-content:center; z-index:9999; }
-    .modal { width:92%; max-width:420px; background:white; padding:14px; border-radius:12px; box-shadow:0 10px 40px rgba(2,6,23,0.18); }
+    .nav-item{ display:flex; flex-direction:column; align-items:center; font-size:0.9rem; color:#0f172a; cursor:pointer; padding:6px 8px; border-radius:10px; }
+    #pageContent {
+      position: relative;
+      transition: transform .35s ease;
+      will-change: transform;
+      overflow-x: hidden;
+    }
+    body {
+      overflow-x: hidden;
+    }
+    
   </style>
 </head>
 <body>
-  <header class="inbox-header">
+   <header class="inbox-header">
     <div style="width:100%;max-width:980px;text-align:center;position:relative;">
       <div style="font-weight:800;font-size:18px;">InfinityChatter</div>
-      <div style="font-size:0.9rem;color:#64748b;margin-top:4px;">
+      <div style="font-size:0.9rem;color:#64748b;margin-top:2px;">
         <span id="myNameHeader"></span>
       </div>
-    </div>
   </header>
-
-  <div id="pageContent">
+  
+  <div id="pageContent" style="min-height:60vh;">
     <main class="inbox-main">
-      <!-- PROFILE CARD -->
-      <div id="profileCard" class="profile-card">
-        <div id="profileAvatar" class="profile-avatar">Y</div>
-        <div class="profile-meta">
-          <div id="profileName" class="profile-name">You</div>
-          <div id="profileStatus" class="profile-status small">No status set</div>
-          <div style="margin-top:8px" class="profile-actions">
-            <button id="editProfileBtn" class="btn ghost">Edit Profile</button>
-            <button id="editStatusBtn" class="btn">Edit Status</button>
-          </div>
-        </div>
-      </div>
-
-      <!-- POST UPDATE -->
-      <div class="update-box">
-        <textarea id="updateText" placeholder="Share an update (what's on your mind?)" style="width:100%;min-height:72px;padding:10px;border-radius:8px;border:1px solid #e6e9ef"></textarea>
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px">
-          <div class="small" id="charCount">0 / 280</div>
-          <div>
-            <button id="postUpdateBtn" class="btn">Post</button>
-          </div>
-        </div>
-      </div>
-
-      <!-- UPDATES FEED -->
-      <div id="updatesFeed" class="updates-feed">
-        <!-- updates will appear here -->
-      </div>
     </main>
   </div>
-
+  
   <div class="bottom-nav" role="navigation" aria-label="main navigation">
     <div class="nav-item" id="nav-chats" data-id="chats" data-path="/inbox"><div>Chats</div></div>
     <div class="nav-item" id="nav-calls" data-id="calls" data-path="/calls"><div>Calls</div></div>
-    <div class="nav-item" id="nav-Updates" data-id="Updates" data-path="/Updates"><div>Updates</div></div>
+    <div class="nav-item" id="nav-Updates" data-id="Updates" data-path="/updates"><div>Updates</div></div>
     <div class="nav-item" id="nav-settings" data-id="settings" data-path="/settings"><div>Settings</div></div>
   </div>
-
 <script>
-(function(){
-  // Helper: load fonts (Pacifico is optional)
-  if (!document.querySelector('link[href*="Pacifico"]')) {
-    const link = document.createElement('link');
-    link.href = "https://fonts.googleapis.com/css2?family=Pacifico&family=Inter:wght@300;400;600&display=swap";
-    link.rel = "stylesheet";
-    document.head.appendChild(link);
+// === InfinityChatter: exact header UI + iOS nav style + corrected nav routing ===
+(function() {
+  // ---- helpers ----
+  function loadFontsOnce() {
+    if (!document.querySelector('link[href*="Pacifico"]')) {
+      const fonts = document.createElement("link");
+      fonts.href = "https://fonts.googleapis.com/css2?family=Pacifico&family=Poppins:wght@400;600&display=swap";
+      fonts.rel = "stylesheet";
+      document.head.appendChild(fonts);
+    }
   }
 
-  // Basic state keys
-  const PROFILE_KEY = 'infinity_profile';
-  const UPDATES_KEY = 'infinity_updates';
-
-  // DOM refs
-  const myNameHeader = document.getElementById('myNameHeader');
-  const profileAvatar = document.getElementById('profileAvatar');
-  const profileNameEl = document.getElementById('profileName');
-  const profileStatusEl = document.getElementById('profileStatus');
-  const editProfileBtn = document.getElementById('editProfileBtn');
-  const editStatusBtn = document.getElementById('editStatusBtn');
-  const updateText = document.getElementById('updateText');
-  const charCount = document.getElementById('charCount');
-  const postUpdateBtn = document.getElementById('postUpdateBtn');
-  const updatesFeed = document.getElementById('updatesFeed');
-
-  // Load profile from localStorage (fallbacks)
-  function loadProfile() {
+  function safeInitIcons() {
     try {
-      const raw = localStorage.getItem(PROFILE_KEY) || '{}';
-      const p = JSON.parse(raw);
-      // Normalize
-      return {
-        name: p.name || p.username || 'You',
-        username: p.username || p.name || '',
-        avatar_url: p.avatar_url || '',
-        status: p.status || '',
-      };
-    } catch (e) {
-      return { name: 'You', username: '', avatar_url: '', status: '' };
-    }
+      if (window.lucide && typeof window.lucide.createIcons === "function") {
+        window.lucide.createIcons();
+      } else if (window.lucide?.default?.createIcons) {
+        window.lucide.default.createIcons();
+      }
+    } catch (err) { console.error("Lucide init error:", err); }
   }
 
-  function saveProfile(profile) {
-    localStorage.setItem(PROFILE_KEY, JSON.stringify(profile));
-    renderProfile();
-  }
-
-  function renderProfile(){
-    const p = loadProfile();
-    // header small name
-    if (myNameHeader) myNameHeader.textContent = p.name || '';
-    // profile name & status
-    profileNameEl.textContent = p.name || 'You';
-    profileStatusEl.textContent = p.status || 'No status set';
-    // avatar (try image, else initial)
-    if (p.avatar_url) {
-      profileAvatar.innerHTML = `<img src="${escapeHtml(p.avatar_url)}" style="width:100%;height:100%;object-fit:cover;border-radius:inherit" onerror="this.style.display='none';this.parentNode.textContent='${escapeHtml((p.name||'You')[0]||'Y')}';">`;
-    } else {
-      profileAvatar.innerHTML = escapeHtml((p.name||'You')[0] || 'Y');
-    }
-  }
-
-  // Utility: escape
-  function escapeHtml(s){ return (s||'').toString().replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
-
-  // Tiny modal prompt with callback (title, placeholder, initial, submitText)
-  function showPromptModal(opts, cb){
-    const backdrop = document.createElement('div');
-    backdrop.className = 'modal-backdrop';
-    const modal = document.createElement('div');
-    modal.className = 'modal';
-    modal.innerHTML = `
-      <div style="font-weight:700;margin-bottom:8px">${escapeHtml(opts.title||'Input')}</div>
-      <div style="margin-bottom:10px"><input id="__modal_input" placeholder="${escapeHtml(opts.placeholder||'')}" value="${escapeHtml(opts.initial||'')}" style="width:100%;padding:8px;border-radius:8px;border:1px solid #e6e9ef"></div>
-      <div style="display:flex;justify-content:flex-end;gap:8px">
-        <button id="__modal_cancel" class="btn ghost">Cancel</button>
-        <button id="__modal_ok" class="btn">${escapeHtml(opts.submitText||'Save')}</button>
-      </div>
-    `;
-    backdrop.appendChild(modal);
-    document.body.appendChild(backdrop);
-    document.getElementById('__modal_cancel').onclick = ()=> backdrop.remove();
-    document.getElementById('__modal_ok').onclick = ()=>{
-      const v = document.getElementById('__modal_input').value.trim();
-      backdrop.remove();
-      cb && cb(v);
-    };
-    // focus input
-    setTimeout(()=> document.getElementById('__modal_input').focus(), 50);
-  }
-
-  // Edit profile
-  editProfileBtn.addEventListener('click', ()=>{
-    const p = loadProfile();
-    // we ask for name, username, avatar URL - use cascade prompts
-    showPromptModal({ title:'Display name', placeholder:'Full name', initial: p.name, submitText:'Next' }, (name) => {
-      if (name === undefined) return;
-      showPromptModal({ title:'Username (local)', placeholder:'username', initial: p.username, submitText:'Next' }, (uname) => {
-        if (uname === undefined) return;
-        showPromptModal({ title:'Avatar URL (optional)', placeholder:'https://...', initial: p.avatar_url, submitText:'Save' }, (avatar) => {
-          const newProfile = { name: name || p.name, username: uname || p.username, avatar_url: avatar||'', status: p.status||'' };
-          saveProfile(newProfile);
-        });
-      });
-    });
-  });
-
-  // Edit status
-  editStatusBtn.addEventListener('click', ()=>{
-    const p = loadProfile();
-    showPromptModal({ title:'Set status', placeholder:'Short status (e.g., Available, Busy)', initial: p.status, submitText:'Save' }, (s) => {
-      if (s === undefined) return;
-      const newProfile = Object.assign({}, loadProfile(), { status: s || ''});
-      saveProfile(newProfile);
-    });
-  });
-
-  // Character count
-  updateText.addEventListener('input', ()=> {
-    const l = updateText.value.length;
-    charCount.textContent = `${l} / 280`;
-  });
-
-  // Updates storage
-  function loadUpdates(){
-    try { return JSON.parse(localStorage.getItem(UPDATES_KEY) || '[]'); } catch { return []; }
-  }
-  function saveUpdates(list){ localStorage.setItem(UPDATES_KEY, JSON.stringify(list)); }
-
-  // Post update
-  postUpdateBtn.addEventListener('click', ()=>{
-    const txt = updateText.value.trim();
-    if (!txt) return alert('Please write something to post.');
-    const p = loadProfile();
-    const list = loadUpdates();
-    list.unshift({ id: Date.now(), author: p.name || p.username || 'You', text: txt, ts: Date.now() });
-    saveUpdates(list);
-    updateText.value = '';
-    charCount.textContent = '0 / 280';
-    renderUpdates();
-  });
-
-  // Render updates
-  function renderUpdates(){
-    const list = loadUpdates();
-    updatesFeed.innerHTML = '';
-    if (!list.length) {
-      updatesFeed.innerHTML = '<div class="small" style="padding:12px;background:transparent">No updates yet — post something!</div>';
+  function loadLucideOnce(callback) {
+    if (window.lucide || document.querySelector('script[src*="lucide"]')) {
+      if (typeof callback === 'function') callback();
+      safeInitIcons();
       return;
     }
-    for (const u of list) {
-      const el = document.createElement('div');
-      el.className = 'update';
-      const time = new Date(u.ts).toLocaleString();
-      el.innerHTML = `
-        <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px">
-          <div style="width:44px;height:44px;border-radius:10px;background:#eef;display:flex;align-items:center;justify-content:center;font-weight:700;color:var(--prim)">${escapeHtml((u.author||'Y')[0])}</div>
-          <div style="flex:1;min-width:0">
-            <div style="font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(u.author)}</div>
-            <div class="small" style="color:var(--muted)">${escapeHtml(time)}</div>
-          </div>
-        </div>
-        <div style="padding-left:54px">${escapeHtml(u.text)}</div>
-      `;
-      updatesFeed.appendChild(el);
-    }
+    const s = document.createElement('script');
+    s.src = "https://unpkg.com/lucide@0.395.0/dist/umd/lucide.min.js";
+    s.async = true;
+    s.onload = () => { safeInitIcons(); if (typeof callback === 'function') callback(); };
+    document.head.appendChild(s);
   }
 
-  // init render
-  renderProfile();
-  renderUpdates();
+  // ---- UI ----
+  loadFontsOnce();
+  loadLucideOnce();
 
-  // --- nav bounce behavior (reuse consistent bounce) ---
-  (function(){
-    // inject style
-    if (!document.getElementById('__nav_bounce_style')) {
-      const st = document.createElement('style');
-      st.id = '__nav_bounce_style';
-      st.textContent = `
-        @keyframes navBounce { 0%{transform:scale(1)} 30%{transform:scale(1.22)} 60%{transform:scale(.92)} 100%{transform:scale(1)} }
-        .nav-bounce { animation: navBounce 0.35s cubic-bezier(.28,1.25,.47,1.03); }
-      `;
-      document.head.appendChild(st);
+  document.querySelectorAll("header").forEach(el => el.remove());
+  const header = document.createElement("header");
+  header.style.cssText = `
+    width:100%;
+    background:#fff;
+    padding:14px 20px 10px;
+    position:fixed;
+    top:0;
+    left:0;
+    z-index:1000;
+    box-shadow:0 1px 10px rgba(0,0,0,0.05);
+    display:flex;
+    flex-direction:column;
+    align-items:flex-start;
+  `;
+  header.innerHTML = `
+    <div style="font-family:'Pacifico',cursive;font-size:32px;font-weight:500;color:#0f172a;line-height:1;">InfinityChatter</div>
+    <div id="subLabel" style="font-family:'Poppins',sans-serif;font-size:15px;color:#475569;margin-top:3px;">Updates</div>
+  `;
+  document.body.prepend(header);
+
+  const nav = document.querySelector('.bottom-nav');
+  const tabs = [
+    { id: "chats", icon: "message-circle", label: "Chats" },
+    { id: "calls", icon: "phone", label: "Calls" },
+    { id: "Updates", icon: "user", label: "Updates" },
+    { id: "settings", icon: "settings", label: "Settings" }
+  ];
+
+  if (!nav) {
+    console.warn("⚠️ .bottom-nav not found");
+  } else {
+    nav.classList.add("ios-bottom-nav");
+    nav.style.cssText = `
+      position:fixed;
+      bottom:20px;
+      left:50%;
+      transform:translateX(-50%);
+      width:92%;
+      max-width:480px;
+      background:rgba(255,255,255,0.55);
+      backdrop-filter:blur(30px) saturate(180%);
+      border:1px solid rgba(255,255,255,0.4);
+      border-radius:40px;
+      box-shadow:0 10px 25px rgba(0,0,0,0.12);
+      display:flex;
+      justify-content:space-around;
+      align-items:center;
+      padding:10px 0;
+      font-family:'Poppins',sans-serif;
+      z-index:1000;
+      transition:all .3s ease;
+    `;
+
+    const existing = Array.from(nav.children);
+    function makeIconLabel(tab) {
+      const frag = document.createDocumentFragment();
+      const i = document.createElement('i');
+      i.setAttribute('data-lucide', tab.icon);
+      i.style.width = '24px';
+      i.style.height = '24px';
+      i.style.stroke = '#0f172a';
+      frag.appendChild(i);
+      const lbl = document.createElement('div');
+      lbl.style.fontSize = '12px';
+      lbl.style.marginTop = '-2px';
+      lbl.style.color = '#0f172a';
+      lbl.textContent = tab.label;
+      frag.appendChild(lbl);
+      return frag;
     }
-    const map = { chats:'/inbox', calls:'/calls', Updates:'/Updates', settings:'/settings' };
-    document.querySelectorAll('.bottom-nav .nav-item').forEach(item=>{
-      item.addEventListener('click', (e)=>{
-        e.preventDefault();
-        item.classList.remove('nav-bounce');
-        void item.offsetWidth;
-        item.classList.add('nav-bounce');
-        const id = item.dataset.id;
-        const route = map[id] || '/inbox';
-        setTimeout(()=> window.location.href = route, 220);
-      });
-    });
-  })();
 
-  // Expose for debugging
-  window.__updates = { loadProfile, saveProfile, loadUpdates, saveUpdates, renderProfile, renderUpdates };
+    for (let i = 0; i < tabs.length; i++) {
+      const tab = tabs[i];
+      let item = existing[i];
+      if (item) {
+        while (item.firstChild) item.removeChild(item.firstChild);
+        item.appendChild(makeIconLabel(tab));
+        item.classList.add('nav-item');
+        item.dataset.id = tab.id;
+        item.style.cssText = "text-align:center;cursor:pointer;transition:transform .2s;flex:1;";
+      } else {
+        item = document.createElement('div');
+        item.className = 'nav-item';
+        item.dataset.id = tab.id;
+        item.style.cssText = "text-align:center;cursor:pointer;transition:transform .2s;flex:1;";
+        item.appendChild(makeIconLabel(tab));
+        nav.appendChild(item);
+      }
+    }
+
+    safeInitIcons();
+
+    // --- fixed and simplified correct navigation map ---
+    const routeMap = {
+      chats: "/inbox",          // main chat inbox page
+      calls: "/calls",    // call page
+      Updates: "/Updates",     // Updates page
+      settings: "/settings"    // settings page
+    };
+  }
+
+  // Elegant non-repeating gradient background
+  document.documentElement.style.background = 'linear-gradient(180deg, #f8fafc 0%, #eef2ff 100%)';
+  document.documentElement.style.backgroundRepeat = 'no-repeat';
+  document.documentElement.style.backgroundAttachment = 'fixed';
+
+  const currTop = parseInt(window.getComputedStyle(document.body).paddingTop || '0', 10);
+  if (currTop < 90) document.body.style.paddingTop = '90px';
+  const currBottom = parseInt(window.getComputedStyle(document.body).paddingBottom || '0', 10);
+  if (currBottom < 130) document.body.style.paddingBottom = '130px';
 
 })();
+
+(function() {
+  const routeMap = {
+    chats: '/inbox',
+    calls: '/calls',
+    Updates: '/Updates',
+    settings: '/settings'
+  };
+
+  // Inject bounce animation style once
+  const style = document.createElement('style');
+  style.textContent = `
+    @keyframes navBounce {
+      0%   { transform: scale(1); }
+      30%  { transform: scale(1.25); }
+      60%  { transform: scale(0.9); }
+      100% { transform: scale(1); }
+    }
+    .nav-bounce {
+      animation: navBounce 0.35s cubic-bezier(.28,1.25,.47,1.03);
+    }
+  `;
+  document.head.appendChild(style);
+
+  // Add click logic with bounce and header update
+  document.querySelectorAll('.bottom-nav .nav-item').forEach(item => {
+    item.addEventListener('click', e => {
+      e.preventDefault();
+      item.classList.remove('nav-bounce');
+      void item.offsetWidth; // restart animation
+      item.classList.add('nav-bounce');
+
+      const id = item.dataset.id;
+      const target = routeMap[id];
+
+      // Update header text instantly
+      const subLabel = document.getElementById('subLabel');
+      if (subLabel) {
+        subLabel.textContent = id.charAt(0).toUpperCase() + id.slice(1);
+      }
+
+      if (target && window.location.pathname !== target) {
+        setTimeout(() => window.location.href = target, 250); // navigate after bounce
+      }
+    });
+  });
+
+  // Set correct header label on first load
+  const pathMap = {
+    '/inbox': 'Chats',
+    '/calls': 'Calls',
+    '/Updates': 'Updates',
+    '/settings': 'Settings'
+  };
+  const subLabel = document.getElementById('subLabel');
+  if (subLabel) {
+    subLabel.textContent = pathMap[window.location.pathname] || 'Chats';
+  }
+})();
+
 </script>
 </body>
 </html>
