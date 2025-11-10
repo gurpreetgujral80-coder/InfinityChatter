@@ -789,11 +789,27 @@
         qs.set('t', t);
         if (profileLocal && profileLocal.name) qs.set('username', profileLocal.name);
       
-        // debug log (will appear briefly before redirect)
-        console.log('→ Opening chat', { contactId, isSelf, token: t, url: '/chat?' + qs.toString() });
-      
-        // navigate
-        window.location.assign('/chat?' + qs.toString());
+        const chatUrl = '/chat?' + qs.toString();
+        console.log('✅ Chat debug info:', { contactId, isSelf, token: t, url: chatUrl });
+        
+        if (isSelf) {
+          // ⚡ Self chat opens inline or via history push (no full reload)
+          if (window.history && window.history.pushState) {
+            window.history.pushState({}, '', chatUrl);
+            if (typeof openChatPage === 'function') {
+              openChatPage(t, profileLocal.name); // if you have a JS chat loader
+            } else {
+              console.log('Opened self chat (no reload)');
+            }
+          } else {
+            // fallback for old browsers
+            window.location.assign(chatUrl);
+          }
+        } else {
+          // Normal contacts → reload as usual
+          window.location.assign(chatUrl);
+        }
+
       });
   
       // MENU BUTTON (placeholder)
