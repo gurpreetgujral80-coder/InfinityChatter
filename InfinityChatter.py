@@ -7770,11 +7770,14 @@ def send_message():
 
 @app.route("/api/set_session", methods=["POST"])
 def set_session():
-    from flask import request, jsonify, session as flask_session
+    from flask import request, jsonify, session as flask_session, current_app
     data = request.get_json(force=True)
     username = data.get("username")
     if username:
+        flask_session.clear()
         flask_session["username"] = username
+        touch_user_presence(username)
+        current_app.logger.info(f"[SELF CHAT] Session restored for {username}")
         return jsonify({"ok": True})
     return jsonify({"ok": False}), 400
 
