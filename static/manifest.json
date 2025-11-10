@@ -1,0 +1,14 @@
+{
+  "name": "InfinityChatter",
+  "start_url": "/",
+  "display": "standalone",
+  "theme_color": "#0f172a",
+  "background_color": "#ffffff",
+  "icons": [
+    {
+      "src": "/static/favicon.png",
+      "sizes": "500x500",
+      "type": "image/png"
+    }
+  ]
+}
