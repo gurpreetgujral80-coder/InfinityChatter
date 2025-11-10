@@ -925,7 +925,8 @@ def invite_landing(token):
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Join InfinityChatter ♾️</title>
+  <title>Join InfinityChatter</title>
+  <link rel="icon" type="image/png" href="/static/favicon.png">
   <script src="https://cdn.tailwindcss.com"></script>
   <link href="https://fonts.googleapis.com/css2?family=Pacifico&family=Poppins:wght@400;600&display=swap" rel="stylesheet">
 </head>
@@ -1485,7 +1486,8 @@ AUDIO_CALL_HTML = r"""
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Audio Call — InfinityChatter ♾️</title>
+  <title>Audio Call — InfinityChatter</title>
+  <link rel="icon" type="image/png" href="/static/favicon.png">
   <style>
     :root{--bg:#0b1320;--panel:#0f1b2b;--accent:#25D366;--muted:#b6c2cf}
     html,body{height:100%;margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,"Helvetica Neue",Arial}
@@ -1710,7 +1712,8 @@ AVATAR_CREATE_HTML = r'''<!-- AVATAR_CREATE_HTML (updated) -->
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>Create Avatar - InfinityChatter ♾️</title>
+<title>Create Avatar - InfinityChatter</title>
+<link rel="icon" type="image/png" href="/static/favicon.png">
 <script src="https://cdn.tailwindcss.com"></script>
 <style>
   body{font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial; background: #f8fafc; padding:18px;}
@@ -1949,6 +1952,7 @@ LOGIN_HTML = r'''<!doctype html>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>InfinityChatter — Login</title>
+  <link rel="icon" type="image/png" href="/static/favicon.png">
   <script src="https://cdn.tailwindcss.com"></script>
   <style>
     body { background:linear-gradient(135deg,#eff6ff,#f5f3ff); display:flex; align-items:center; justify-content:center; height:100vh; font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,"Helvetica Neue",Arial; }
@@ -2013,7 +2017,8 @@ LOGIN_HTML = r'''<!doctype html>
 # --- AVATAR page (full-featured generator using DiceBear HTTP API) ---
 AVATAR_HTML = r'''<!doctype html>
 <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>Create Avatar — Asphalt Legends</title>
+<title>Create Avatar — InfinityChatter</title>
+<link rel="icon" type="image/png" href="/static/favicon.png">
 <script src="https://cdn.tailwindcss.com"></script>
 <style>
   body{ font-family: Inter, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial; padding:12px; background:#f8fafc; }
@@ -2239,7 +2244,8 @@ CHAT_HTML = r'''<!doctype html>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>InfinityChatter ♾️ — Chat</title>
+  <title>InfinityChatter — Chat</title>
+  <link rel="icon" type="image/png" href="/static/favicon.png">
   <script src="https://cdn.tailwindcss.com"></script>
 
   <!-- emoji-mart v5 browser build (exposes global EmojiMart for vanilla JS) -->
