@@ -56,13 +56,20 @@ def allow_iframe(response):
 
 # -------- CONFIG ----------
 app.secret_key = os.environ.get("SECRET_KEY", "dev-secret-change-me")
-# session cookie fix for Render & mobile browsers
+
+# Detect if we're on Render (HTTPS)
+import os
+is_render = "onrender.com" in os.environ.get("RENDER_EXTERNAL_HOSTNAME", "") or "onrender.com" in os.environ.get("RENDER_URL", "")
+
+# Flask session cookie fix (works for local + Render + mobile browsers)
 app.config.update({
-    "SESSION_COOKIE_SAMESITE": "None",  # allow cross-site or fetch navigation
-    "SESSION_COOKIE_SECURE": True,      # required for HTTPS
-    "SESSION_COOKIE_HTTPONLY": True,    # security
-    "SESSION_COOKIE_PATH": "/",  
-    "SESSION_COOKIE_DOMAIN": ".onrender.com",
+    "SESSION_COOKIE_SAMESITE": "None" if is_render else "Lax",
+    "SESSION_COOKIE_SECURE": is_render,        # Secure=True only on HTTPS
+    "SESSION_COOKIE_HTTPONLY": True,
+    "SESSION_COOKIE_PATH": "/",
+    "SESSION_COOKIE_DOMAIN": (
+        ".onrender.com" if is_render else None
+    ),
 })
 
 PORT = int(os.environ.get("PORT", 5004))
