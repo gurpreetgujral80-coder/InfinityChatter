@@ -56,12 +56,14 @@ def allow_iframe(response):
 
 # -------- CONFIG ----------
 app.secret_key = os.environ.get("SECRET_KEY", "dev-secret-change-me")
-# Optional cookie config
-app.config.update(
-    SESSION_COOKIE_SAMESITE="Lax",
-    SESSION_COOKIE_HTTPONLY=True,
-    SESSION_COOKIE_SECURE=True  # set to True in production (HTTPS)
-)
+# session cookie fix for Render & mobile browsers
+app.config.update({
+    "SESSION_COOKIE_SAMESITE": "None",  # allow cross-site or fetch navigation
+    "SESSION_COOKIE_SECURE": True,      # required for HTTPS
+    "SESSION_COOKIE_HTTPONLY": True,    # security
+    "SESSION_COOKIE_PATH": "/",          # make sure it applies to all routes
+})
+
 PORT = int(os.environ.get("PORT", 5004))
 DB_PATH = os.path.join(os.path.dirname(__file__), "Asphalt_legends.db")
 HEADING_IMG = "/static/heading.png"  # place your heading image here
