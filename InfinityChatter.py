@@ -7771,17 +7771,28 @@ def send_message():
         return jsonify({'error': str(e)}), 500
 
 @app.route("/api/set_session", methods=["POST"])
-def set_session():
-    from flask import request, jsonify, session as flask_session, current_app
-    data = request.get_json(force=True)
+def api_set_session():
+    from flask import jsonify, request, session as flask_session
+    data = request.get_json(force=True) or {}
     username = data.get("username")
-    if username:
-        flask_session.clear()
-        flask_session["username"] = username
-        touch_user_presence(username)
-        current_app.logger.info(f"[SELF CHAT] Session restored for {username}")
-        return jsonify({"ok": True})
-    return jsonify({"ok": False}), 400
+
+    if not username:
+        return jsonify({"error": "missing username"}), 400
+
+    flask_session["username"] = username
+
+    # Explicitly mark session as modified and save
+    flask_session.modified = True
+    resp = jsonify({"ok": True, "session_username": username})
+    resp.set_cookie(
+        key=app.session_cookie_name,
+        value=flask_session.sid if hasattr(flask_session, "sid") else flask_session.get("_id", "manual"),
+        secure=True,
+        httponly=True,
+        samesite="None",
+        path="/"
+    )
+    return resp
 
 @app.route('/poll')
 @app.route('/messages')
