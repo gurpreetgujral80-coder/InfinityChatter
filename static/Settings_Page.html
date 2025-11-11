@@ -266,6 +266,204 @@
   }
 })();
 
+(function(){
+  // CONFIG
+  const faviconPath = '/static/favicon.png'; // your single file
+  const storageKeyInstalled = 'ic_app_installed';
+  const storageKeyPromptShown = 'ic_install_prompt_shown';
+
+  // create card UI
+  function createInstallBox() {
+    // find best insertion point on settings page
+    const main = document.querySelector('#settingsMain') || document.querySelector('main') || document.getElementById('pageContent') || document.body;
+    if (!main) return;
+
+    // avoid duplicates
+    if (document.getElementById('ic-install-box')) return;
+
+    const card = document.createElement('div');
+    card.id = 'ic-install-box';
+    card.setAttribute('role','button');
+    card.setAttribute('aria-label','Install InfinityChatter');
+    card.style.cssText = `
+      max-width:480px;
+      margin:18px auto;
+      display:flex;
+      align-items:center;
+      gap:12px;
+      background:linear-gradient(180deg, #ffffff, #fbfdff);
+      padding:12px 14px;
+      border-radius:12px;
+      box-shadow:0 6px 26px rgba(2,6,23,0.06);
+      cursor:pointer;
+      transition:transform .14s ease, box-shadow .14s ease;
+      font-family: Poppins, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial;
+    `;
+    card.onmousedown = () => { card.style.transform = 'scale(.997)'; };
+    card.onmouseup = card.onmouseleave = () => { card.style.transform = 'none'; };
+
+    // favicon corner square
+    const imgWrap = document.createElement('div');
+    imgWrap.style.cssText = 'width:56px;height:56px;border-radius:12px;overflow:hidden;flex:0 0 56px;display:flex;align-items:center;justify-content:center;background:#f1f5f9;';
+    const img = document.createElement('img');
+    img.src = faviconPath;
+    img.alt = 'InfinityChatter';
+    img.style.cssText = 'width:44px;height:44px;object-fit:cover;border-radius:8px;box-shadow:0 2px 8px rgba(2,6,23,0.06)';
+    imgWrap.appendChild(img);
+
+    const txt = document.createElement('div');
+    txt.style.cssText = 'flex:1;min-width:0';
+    txt.innerHTML = `
+      <div style="font-weight:700;color:#0f172a;font-size:15px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">Install InfinityChatter</div>
+      <div style="font-size:13px;color:#64748b;margin-top:4px">Install to your device for quick access & push-like experience</div>
+    `;
+
+    const status = document.createElement('div');
+    status.id = 'ic-install-status';
+    status.style.cssText = 'margin-left:6px;flex:0 0 auto;font-size:13px;color:#0f172a;font-weight:600;';
+
+    card.appendChild(imgWrap);
+    card.appendChild(txt);
+    card.appendChild(status);
+
+    // append to page (before first section to make it prominent)
+    // if page has a settings container, insert at top
+    if (main.firstElementChild) main.insertBefore(card, main.firstElementChild);
+    else main.appendChild(card);
+
+    return card;
+  }
+
+  // iOS fallback modal (instructions)
+  function showIOSInstructions() {
+    if (document.getElementById('ic-ios-modal')) return;
+    const overlay = document.createElement('div');
+    overlay.id = 'ic-ios-modal';
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.45);display:flex;align-items:center;justify-content:center;z-index:99999;';
+    overlay.innerHTML = `
+      <div style="width:92%;max-width:420px;background:#fff;border-radius:12px;padding:18px;font-family:Poppins, sans-serif;box-shadow:0 12px 40px rgba(2,6,23,0.25);">
+        <div style="display:flex;align-items:center;gap:12px;">
+          <img src="${faviconPath}" alt="Icon" style="width:56px;height:56px;border-radius:10px;object-fit:cover;">
+          <div>
+            <div style="font-weight:700;font-size:1.05rem;color:#0f172a">Install InfinityChatter</div>
+            <div style="font-size:0.9rem;color:#64748b;margin-top:4px">On iPhone / iPad, use the Share menu → "Add to Home Screen"</div>
+          </div>
+        </div>
+        <ol style="margin-top:12px;color:#475569;padding-left:18px">
+          <li>Tap the Share button in Safari (the rectangle + arrow).</li>
+          <li>Scroll and tap <strong>Add to Home Screen</strong>.</li>
+          <li>Confirm — the app icon will appear on your home screen.</li>
+        </ol>
+        <div style="text-align:right;margin-top:12px;">
+          <button id="ic-ios-close" style="padding:8px 12px;border-radius:8px;background:#0f172a;color:#fff;">Got it</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+    overlay.querySelector('#ic-ios-close').onclick = () => overlay.remove();
+  }
+
+  // Toast helper
+  function showToast(msg, timeout=1800) {
+    const id = 'ic-install-toast';
+    if (document.getElementById(id)) return;
+    const t = document.createElement('div');
+    t.id = id;
+    t.style.cssText = 'position:fixed;left:50%;transform:translateX(-50%);bottom:120px;background:#0f172a;color:#fff;padding:8px 12px;border-radius:10px;z-index:100000;font-family:Poppins, sans-serif;';
+    t.textContent = msg;
+    document.body.appendChild(t);
+    setTimeout(()=> t.style.opacity = '0.9', 10);
+    setTimeout(()=> t.remove(), timeout);
+  }
+
+  // PWA install flow
+  let deferredPrompt = null;
+  let installBox = null;
+
+  function updateInstallBoxState() {
+    if (!installBox) installBox = createInstallBox();
+    const statusEl = document.getElementById('ic-install-status');
+    const alreadyInstalled = localStorage.getItem(storageKeyInstalled) === '1' || window.matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+    if (alreadyInstalled) {
+      if (statusEl) statusEl.textContent = 'Installed';
+      installBox.style.opacity = '0.6';
+      installBox.style.pointerEvents = 'none';
+      return;
+    }
+    // show "Install" CTA if prompt is available, else show "Install" anyway (fallback)
+    if (statusEl) statusEl.textContent = 'Install';
+    installBox.style.pointerEvents = 'auto';
+    installBox.onclick = onInstallBoxClick;
+  }
+
+  async function onInstallBoxClick(e) {
+    // prefer native prompt if available
+    if (deferredPrompt) {
+      try {
+        deferredPrompt.prompt();
+        const choice = await deferredPrompt.userChoice;
+        deferredPrompt = null;
+        localStorage.setItem(storageKeyPromptShown, '1');
+        if (choice && choice.outcome === 'accepted') {
+          localStorage.setItem(storageKeyInstalled, '1');
+          showToast('Installed — enjoy InfinityChatter!');
+          updateInstallBoxState();
+        } else {
+          showToast('Install dismissed');
+        }
+      } catch (err) {
+        console.warn('install prompt failed', err);
+        showToast('Install not available');
+      }
+      return;
+    }
+
+    // If not available, detect iOS (Safari) and show instructions
+    const isiOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
+    if (isiOS) {
+      showIOSInstructions();
+      return;
+    }
+
+    // fallback for other browsers: attempt to open manifest or prompt user
+    // Some browsers (Chrome Desktop) may show a menu option; we simply show a friendly message
+    showToast('If your browser supports PWA install, use the browser menu → Install', 3800);
+  }
+
+  // listen for beforeinstallprompt
+  window.addEventListener('beforeinstallprompt', (e) => {
+    e.preventDefault(); // prevent automatic mini-infobar
+    deferredPrompt = e;
+    localStorage.setItem(storageKeyPromptShown, '1');
+    updateInstallBoxState();
+  });
+
+  // detect successful install
+  window.addEventListener('appinstalled', (e) => {
+    localStorage.setItem(storageKeyInstalled, '1');
+    showToast('App installed');
+    updateInstallBoxState();
+  });
+
+  // if user already installed (standalone) mark installed
+  if (window.matchMedia('(display-mode: standalone)').matches || navigator.standalone === true) {
+    localStorage.setItem(storageKeyInstalled, '1');
+  }
+
+  // show UI immediately (box will adapt)
+  document.addEventListener('DOMContentLoaded', () => {
+    updateInstallBoxState();
+  });
+  // also run right away if script injected after DOM
+  updateInstallBoxState();
+
+  // expose for debugging
+  window.__ic_install = {
+    showIOSInstructions,
+    updateInstallBoxState,
+  };
+})();
+
 </script>
 </body>
 </html>
