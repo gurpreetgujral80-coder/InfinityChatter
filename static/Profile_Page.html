@@ -273,6 +273,491 @@
   }
 })();
 
+(async () => {
+  // ===== InfinityChatter — Updates page: show only contact statuses + 24h expiry =====
+  const PROFILE_KEY = 'infinity_profile';
+  const STATUSES_KEY = 'infinity_statuses';
+  const CONTACTS_KEY = 'infinity_contacts'; // fallback localStorage key for contacts
+  const EXPIRY_MS = 24 * 60 * 60 * 1000; // 24 hours
+
+  // --- helpers ---
+  const loadJSON = (k, f) => { try { return JSON.parse(localStorage.getItem(k)) || f; } catch { return f; } };
+  const saveJSON = (k, v) => localStorage.setItem(k, JSON.stringify(v));
+  const loadProfile = () => loadJSON(PROFILE_KEY, {});
+  const saveProfile = p => { saveJSON(PROFILE_KEY, p); };
+  const loadStatuses = () => loadJSON(STATUSES_KEY, []);
+  const saveStatuses = s => { saveJSON(STATUSES_KEY, s); };
+
+  // --- ensure Pacifico font for headers ---
+  (function ensureFont() {
+    if (!document.querySelector('link[href*="Pacifico"]')) {
+      const l = document.createElement('link');
+      l.href = "https://fonts.googleapis.com/css2?family=Pacifico&family=Poppins:wght@400;600&display=swap";
+      l.rel = "stylesheet";
+      document.head.appendChild(l);
+    }
+  })();
+
+  // --- UI mount points ---
+  const pageContent = document.getElementById('pageContent') || document.body;
+  if (!document.getElementById('ic-updates-root')) {
+    const root = document.createElement('div');
+    root.id = 'ic-updates-root';
+    root.style.maxWidth = '980px';
+    root.style.margin = '14px auto';
+    root.style.padding = '0 6px';
+    pageContent.insertBefore(root, pageContent.firstChild ? pageContent.firstChild.nextSibling : null);
+  }
+  const ROOT = document.getElementById('ic-updates-root');
+
+  // --- timers for scheduled expiry ---
+  const expiryTimers = new Map();
+  function clearExpiryTimers() {
+    expiryTimers.forEach(t => clearTimeout(t));
+    expiryTimers.clear();
+  }
+  function scheduleExpiry(status) {
+    if (!status || !status.expiresAt) return;
+    const ms = status.expiresAt - Date.now();
+    if (ms <= 0) { removeStatusById(status.id); return; }
+    if (expiryTimers.has(status.id)) clearTimeout(expiryTimers.get(status.id));
+    const tid = setTimeout(() => removeStatusById(status.id), ms + 250);
+    expiryTimers.set(status.id, tid);
+  }
+  function scheduleAll() {
+    clearExpiryTimers();
+    const all = loadStatuses();
+    for (const s of all) scheduleExpiry(s);
+  }
+
+  // --- prune expired ---
+  function pruneExpiredStatuses() {
+    const now = Date.now();
+    const list = loadStatuses().filter(s => !s.expiresAt || s.expiresAt > now);
+    saveStatuses(list);
+  }
+
+  // --- add/remove ---
+  function addStatus(entry) {
+    const list = loadStatuses();
+    list.unshift(entry);
+    saveStatuses(list);
+    scheduleExpiry(entry);
+    // don't await renderStatuses here; call it so UI updates
+    renderStatuses().catch(() => {});
+  }
+  function removeStatusById(id) {
+    const list = loadStatuses().filter(s => s.id !== id);
+    saveStatuses(list);
+    if (expiryTimers.has(id)) { clearTimeout(expiryTimers.get(id)); expiryTimers.delete(id); }
+    renderStatuses().catch(() => {});
+  }
+
+  // --- time formatting ---
+  function formatTime(ts) {
+    const d = new Date(ts);
+    const now = Date.now();
+    const diff = Math.floor((now - ts) / 1000);
+    if (diff < 60) return `${diff}s`;
+    if (diff < 3600) return `${Math.floor(diff/60)}m`;
+    if (diff < 24*3600) return `${Math.floor(diff/3600)}h`;
+    return d.toLocaleString();
+  }
+
+  // --- fetch contacts (tries endpoint, then fallback to localStorage / global) ---
+  async function fetchContacts() {
+    // try network first
+    try {
+      const res = await fetch('/api/contacts', { credentials: 'same-origin' });
+      if (res.ok) {
+        const data = await res.json().catch(() => ({}));
+        // try common shapes: { contacts: [...] } or [...]
+        if (Array.isArray(data)) return data;
+        if (data && Array.isArray(data.contacts)) return data.contacts;
+        // if single object with contacts property not present, attempt to return object as array
+        return data.contacts || [];
+      }
+    } catch (err) {
+      // ignore — fallback next
+    }
+
+    // fallback: check global variable window.INFINITY_CONTACTS
+    if (Array.isArray(window.INFINITY_CONTACTS)) return window.INFINITY_CONTACTS;
+
+    // fallback: localStorage key (in case serverless app saved contacts client-side)
+    const stored = loadJSON(CONTACTS_KEY, null);
+    if (Array.isArray(stored)) return stored;
+
+    // final fallback: empty
+    return [];
+  }
+
+  // --- build contact name/id set for fast lookup (lowercased) ---
+  function buildContactMatcher(contacts) {
+    const set = new Set();
+    if (!Array.isArray(contacts)) return set;
+    for (const c of contacts) {
+      // collect likely identifier fields
+      const candidates = [];
+      if (!c) continue;
+      if (typeof c === 'string') candidates.push(c);
+      if (c.name) candidates.push(c.name);
+      if (c.displayName) candidates.push(c.displayName);
+      if (c.username) candidates.push(c.username);
+      if (c.contact_name) candidates.push(c.contact_name);
+      if (c.email) candidates.push(c.email);
+      if (c.id) candidates.push(String(c.id));
+      // normalize and add
+      for (const s of candidates) {
+        if (!s) continue;
+        set.add(String(s).toLowerCase().trim());
+      }
+    }
+    return set;
+  }
+
+  // --- check if a status was posted by a contact ---
+  function isStatusFromContact(status, contactSet) {
+    if (!status || !contactSet || contactSet.size === 0) return false;
+    // check several fields on status
+    const checks = [];
+    if (status.author) checks.push(status.author);
+    if (status.authorName) checks.push(status.authorName);
+    if (status.author_id) checks.push(String(status.author_id));
+    if (status.authorId) checks.push(String(status.authorId));
+    if (status.authorEmail) checks.push(status.authorEmail);
+    if (status.email) checks.push(status.email);
+    // also check avatar URL (unlikely), and anything else
+    for (const v of checks) {
+      if (!v) continue;
+      if (contactSet.has(String(v).toLowerCase().trim())) return true;
+    }
+    // as a last resort, compare by fuzzy substring: contact name contained in author string
+    for (const c of contactSet) {
+      for (const v of checks) {
+        if (!v) continue;
+        try {
+          if (String(v).toLowerCase().includes(c)) return true;
+        } catch {}
+      }
+    }
+    return false;
+  }
+
+  // --- composer modal (unchanged from your previous implementation) ---
+  function showComposerModal(existingText = '', existingMedia = []) {
+    if (document.getElementById('ic-composer-modal')) return;
+    const profile = loadProfile();
+    const modal = document.createElement('div');
+    modal.id = 'ic-composer-modal';
+    modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.45);display:flex;align-items:center;justify-content:center;z-index:99999;padding:18px';
+    modal.innerHTML = `
+      <div style="width:100%;max-width:720px;background:#fff;border-radius:12px;padding:14px;box-shadow:0 10px 40px rgba(2,6,23,0.2);font-family:Poppins, sans-serif;">
+        <div style="display:flex;gap:12px;align-items:center;margin-bottom:8px">
+          <div style="flex:0 0 56px">
+            ${ profile.avatar_url ? `<img src="${profile.avatar_url}" style="width:56px;height:56px;border-radius:12px;object-fit:cover">` : `<div style="width:56px;height:56px;border-radius:12px;background:#e2e8f0;display:flex;align-items:center;justify-content:center;font-weight:700;color:#0f172a">${(profile.name||'You')[0]||'?'}</div>`}
+          </div>
+          <div style="flex:1">
+            <div style="font-weight:700;color:#0f172a">${profile.name || 'You'}</div>
+            <div style="font-size:0.9rem;color:#64748b">Add a status</div>
+          </div>
+          <div style="flex:0 0 auto"><button id="ic-composer-close" style="background:transparent;border:none;font-weight:600;cursor:pointer">Close</button></div>
+        </div>
+
+        <textarea id="ic-composer-text" placeholder="Type Something..." rows="4" style="width:100%;padding:10px;border-radius:10px;border:1px solid #e6eef7;font-family:inherit;font-size:1rem">${existingText || ''}</textarea>
+
+        <div id="ic-composer-previews" style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap"></div>
+
+        <div style="display:flex;gap:8px;align-items:center;margin-top:12px">
+          <label style="display:inline-flex;align-items:center;gap:8px;cursor:pointer;background:#eef2ff;padding:8px 10px;border-radius:8px;font-weight:600;">
+            <input id="ic-composer-files" type="file" accept="image/*,video/*" multiple style="display:none">
+            Add photos/videos
+          </label>
+          <div style="flex:1"></div>
+          <button id="ic-composer-clear" style="background:transparent;border:none;color:#64748b;padding:8px 12px;border-radius:8px;cursor:pointer">Clear</button>
+          <button id="ic-composer-post" style="background:#0f172a;color:white;padding:8px 14px;border-radius:10px;border:none;cursor:pointer">Post</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(modal);
+
+    const filesInput = modal.querySelector('#ic-composer-files');
+    const previews = modal.querySelector('#ic-composer-previews');
+    const textArea = modal.querySelector('#ic-composer-text');
+    let staged = existingMedia.slice() || [];
+
+    function renderPreviews() {
+      previews.innerHTML = '';
+      for (let i = 0; i < staged.length; i++) {
+        const item = staged[i];
+        const wrap = document.createElement('div');
+        wrap.style.cssText = 'width:116px;height:86px;border-radius:10px;overflow:hidden;position:relative;background:#f8fafc;display:flex;align-items:center;justify-content:center;box-shadow:0 8px 22px rgba(2,6,23,0.06)';
+        const del = document.createElement('button');
+        del.textContent = '✕';
+        del.title = 'Remove';
+        del.style.cssText = 'position:absolute;top:6px;right:6px;background:rgba(0,0,0,0.55);color:#fff;border:none;border-radius:6px;padding:2px 6px;cursor:pointer';
+        del.onclick = e => { e.stopPropagation(); staged.splice(i,1); renderPreviews(); };
+        if (item.type === 'image') {
+          const img = document.createElement('img'); img.src = item.data; img.style.cssText = 'width:100%;height:100%;object-fit:cover';
+          wrap.appendChild(img);
+        } else {
+          const v = document.createElement('video'); v.src = item.data; v.muted = true; v.loop = true; v.autoplay = true; v.style.cssText = 'width:100%;height:100%;object-fit:cover';
+          wrap.appendChild(v);
+        }
+        wrap.appendChild(del);
+        previews.appendChild(wrap);
+      }
+    }
+
+    filesInput.onchange = async (ev) => {
+      const files = Array.from(ev.target.files || []);
+      for (const f of files) {
+        if (f.size > 50 * 1024 * 1024) alert('Large file (>50MB) — may be slow');
+        const r = new FileReader();
+        await new Promise(res => {
+          r.onload = () => {
+            const data = r.result;
+            const type = f.type.startsWith('video') ? 'video' : 'image';
+            staged.push({ type, data, name: f.name });
+            renderPreviews();
+            res();
+          };
+          r.readAsDataURL(f);
+        });
+      }
+      filesInput.value = '';
+    };
+
+    modal.querySelector('#ic-composer-clear').onclick = () => {
+      textArea.value = '';
+      staged = [];
+      renderPreviews();
+    };
+
+    modal.querySelector('#ic-composer-close').onclick = () => modal.remove();
+
+    modal.querySelector('#ic-composer-post').onclick = () => {
+      const text = (textArea.value || '').trim();
+      if (!text && staged.length === 0) return alert('Type something or add media before posting.');
+
+      const profileLocal = loadProfile();
+      const now = Date.now();
+      const statusEntry = {
+        id: 's-' + now + '-' + Math.random().toString(36).slice(2,8),
+        author: profileLocal.name || 'You',
+        avatar: profileLocal.avatar_url || '',
+        text,
+        media: staged.map(x => ({ type: x.type, data: x.data, name: x.name })),
+        createdAt: now,
+        expiresAt: now + EXPIRY_MS
+      };
+      addStatus(statusEntry);
+      modal.remove();
+    };
+
+    renderPreviews();
+  }
+
+  // --- Add Status box (shows avatar + "Add Status" label). clicking anywhere opens composer modal ---
+  function renderAddStatusArea() {
+    const prev = document.getElementById('ic-add-status-area');
+    if (prev) prev.remove();
+
+    const profile = loadProfile();
+    const area = document.createElement('div');
+    area.id = 'ic-add-status-area';
+    area.style.cssText = 'max-width:980px;margin:12px auto 6px;display:flex;align-items:center;gap:12px;padding:12px;border-radius:12px;background:linear-gradient(180deg,#fff,#fbfdff);box-shadow:0 10px 30px rgba(2,6,23,0.04);cursor:pointer';
+
+    const avatarHtml = profile.avatar_url
+      ? `<img src="${profile.avatar_url}" style="width:64px;height:64px;border-radius:12px;object-fit:cover">`
+      : `<div style="width:64px;height:64px;border-radius:12px;background:#e2e8f0;display:flex;align-items:center;justify-content:center;font-weight:700;color:#0f172a">${(profile.name||'You')[0]||'?'}</div>`;
+
+    area.innerHTML = `
+      <div style="flex:0 0 auto">${avatarHtml}</div>
+      <div style="flex:1;display:flex;flex-direction:column;gap:6px">
+        <div style="font-family: 'Poppins',sans-serif; font-weight:700; color:#0f172a; font-size:1rem;">Add Status</div>
+        <div style="font-size:0.95rem;color:#64748b">Tap to Add a Status</div>
+      </div>
+    `;
+
+    ROOT.appendChild(area);
+
+    // inject Pacifo "Add Status" header above area if not already present
+    const existingHeader = document.getElementById('ic-add-status-header');
+    if (!existingHeader) {
+      const header = document.createElement('div');
+      header.id = 'ic-add-status-header';
+      header.textContent = 'Add Status';
+      header.style.cssText = "font-family:'Pacifico',cursive;font-size:1.7rem;color:#0f172a;max-width:980px;margin:10px auto 6px;padding-left:6px";
+      ROOT.insertBefore(header, area);
+    }
+
+    // clicking anywhere on the area opens composer modal
+    area.addEventListener('click', (ev) => {
+      showComposerModal();
+    });
+  }
+
+  // --- "Updates" header placed under Add Status area and above feed ---
+  function renderUpdatesHeader() {
+    const existing = document.getElementById('ic-updates-header');
+    if (existing) existing.remove();
+    const hdr = document.createElement('div');
+    hdr.id = 'ic-updates-header';
+    hdr.textContent = 'Updates';
+    hdr.style.cssText = "font-family:'Pacifico',cursive;font-size:1.7rem;color:#0f172a;max-width:980px;margin:12px auto 8px;padding-left:6px";
+    // place it after add-status area
+    const area = document.getElementById('ic-add-status-area');
+    if (area && area.parentNode) area.parentNode.insertBefore(hdr, area.nextSibling);
+    else ROOT.insertBefore(hdr, ROOT.firstChild);
+  }
+
+  // --- render statuses feed as boxes (only contacts) ---
+  async function renderStatuses() {
+    const oldFeed = document.getElementById('ic-statuses-feed');
+    if (oldFeed) oldFeed.remove();
+
+    const feed = document.createElement('div');
+    feed.id = 'ic-statuses-feed';
+    feed.style.maxWidth = '980px';
+    feed.style.margin = '6px auto 60px';
+    feed.style.display = 'flex';
+    feed.style.flexDirection = 'column';
+    feed.style.gap = '12px';
+    feed.style.padding = '0 6px';
+
+    // load statuses & contacts
+    const statuses = loadStatuses();
+    const contacts = await fetchContacts();
+    const contactSet = buildContactMatcher(contacts);
+
+    // Filter: only statuses authored by contacts
+    const visible = statuses.filter(s => isStatusFromContact(s, contactSet));
+
+    if (!visible.length) {
+      // helpful message depending on whether we have any contacts
+      const noContacts = (contacts.length === 0);
+      const empty = document.createElement('div');
+      empty.style.cssText = 'text-align:center;color:#64748b;padding:28px;background:transparent';
+      empty.textContent = noContacts ? 'No contacts found — add contacts to see their statuses.' : 'No contact statuses yet.';
+      feed.appendChild(empty);
+      ROOT.appendChild(feed);
+      return;
+    }
+
+    for (const s of visible) {
+      const card = document.createElement('div');
+      card.style.cssText = 'display:flex;align-items:flex-start;gap:12px;padding:12px;border-radius:12px;background:#fff;box-shadow:0 8px 22px rgba(2,6,23,0.04);cursor:pointer;margin:0 6px;';
+      const left = document.createElement('div');
+      left.style.cssText = 'flex:0 0 56px';
+      left.innerHTML = s.avatar ? `<img src="${s.avatar}" style="width:56px;height:56px;border-radius:10px;object-fit:cover">` : `<div style="width:56px;height:56px;border-radius:10px;background:#e2e8f0;display:flex;align-items:center;justify-content:center;font-weight:700;color:#0f172a">${(s.author||'U')[0]||'?'}</div>`;
+
+      const mid = document.createElement('div');
+      mid.style.cssText = 'flex:1;min-width:0';
+      mid.innerHTML = `<div style="font-weight:700;color:#0f172a">${s.author || 'You'}</div><div style="color:#475569;font-size:0.95rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:680px;margin-top:6px">${s.text || ''}</div>`;
+
+      const right = document.createElement('div');
+      right.style.cssText = 'flex:0 0 auto;font-size:0.85rem;color:#64748b;margin-left:8px';
+      right.textContent = new Date(s.createdAt).toLocaleString([], {
+         year: 'numeric',
+         month: 'short',
+         day: 'numeric',
+         hour: '2-digit',
+         minute: '2-digit'
+      });
+
+      card.appendChild(left);
+      card.appendChild(mid);
+      card.appendChild(right);
+
+      // click opens modal to view full status
+      card.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        showStatusModal(s);
+      });
+
+      feed.appendChild(card);
+    }
+
+    ROOT.appendChild(feed);
+  }
+
+  // --- status view modal (unchanged) ---
+  function showStatusModal(status) {
+    if (!status) return;
+    if (document.getElementById('ic-status-view-modal')) return;
+    const modal = document.createElement('div');
+    modal.id = 'ic-status-view-modal';
+    modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.45);display:flex;align-items:center;justify-content:center;z-index:99999;padding:18px';
+    modal.innerHTML = `
+      <div style="width:100%;max-width:760px;background:#fff;border-radius:12px;padding:14px;box-shadow:0 10px 40px rgba(2,6,23,0.2);font-family:Poppins, sans-serif;">
+        <div style="display:flex;align-items:center;gap:12px;margin-bottom:10px">
+          <div style="flex:0 0 56px">${status.avatar ? `<img src="${status.avatar}" style="width:56px;height:56px;border-radius:12px;object-fit:cover">` : `<div style="width:56px;height:56px;border-radius:12px;background:#e2e8f0;display:flex;align-items:center;justify-content:center;font-weight:700;color:#0f172a">${(status.author||'U')[0]||'?'}</div>`}</div>
+          <div style="flex:1">
+            <div style="font-weight:700;color:#0f172a">${status.author || 'You'}</div>
+            <div style="color:#64748b;font-size:0.9rem">${new Date(status.createdAt).toLocaleString()}</div>
+          </div>
+          <div style="flex:0 0 auto"><button id="ic-status-close" style="background:transparent;border:none;font-weight:600;cursor:pointer">Close</button></div>
+        </div>
+
+        <div style="color:#0f172a;font-size:1rem;white-space:pre-wrap;margin-bottom:12px">${status.text || ''}</div>
+
+        <div id="ic-status-media" style="display:flex;gap:8px;flex-wrap:wrap"></div>
+
+        <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px">
+          <button id="ic-status-delete" style="background:#ef4444;color:#fff;border:none;padding:8px 12px;border-radius:8px;cursor:pointer">Delete</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(modal);
+
+    const mediaWrap = modal.querySelector('#ic-status-media');
+    if (Array.isArray(status.media)) {
+      for (const m of status.media) {
+        if (m.type === 'image') {
+          const img = document.createElement('img'); img.src = m.data;
+          img.style.cssText = 'width:260px;height:160px;object-fit:cover;border-radius:10px';
+          mediaWrap.appendChild(img);
+        } else {
+          const v = document.createElement('video'); v.src = m.data; v.controls = true;
+          v.style.cssText = 'width:320px;height:200px;object-fit:cover;border-radius:10px';
+          mediaWrap.appendChild(v);
+        }
+      }
+    }
+
+    modal.querySelector('#ic-status-close').onclick = () => modal.remove();
+    modal.querySelector('#ic-status-delete').onclick = () => {
+      if (!confirm('Delete this status?')) return;
+      removeStatusById(status.id);
+      modal.remove();
+    };
+  }
+
+  // --- boot sequence (async) ---
+  pruneExpiredStatuses();
+  scheduleAll();
+
+  // UI: remove any existing composer/profile editing blocks to avoid duplication
+  const existingComposer = document.getElementById('updateComposer');
+  if (existingComposer) existingComposer.remove();
+  const existingProfileCard = document.getElementById('profileCard');
+  if (existingProfileCard) existingProfileCard.remove(); // keep profile editing in settings only
+
+  // Render Add Status area, Updates header and feed (feed awaits contact fetch)
+  renderAddStatusArea();
+  renderUpdatesHeader();
+  await renderStatuses();
+
+  // Re-render times every minute & prune periodically
+  setInterval(async () => {
+    pruneExpiredStatuses();
+    await renderStatuses();
+  }, 60 * 1000);
+
+  // Ensure any newly created status gets scheduled
+  window.ic_schedule_all_status_expiries = scheduleAll;
+})();
 </script>
 </body>
 </html>
