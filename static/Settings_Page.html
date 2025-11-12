@@ -43,6 +43,42 @@
   </header>
   
   <div id="pageContent" style="min-height:60vh;">
+    <div id="profileCard" style="
+      display:flex;
+      flex-direction:column;
+      align-items:center;
+      justify-content:center;
+      background:linear-gradient(135deg,#f8fafc,#eef2ff);
+      padding:18px;
+      border-radius:18px;
+      box-shadow:0 8px 24px rgba(0,0,0,0.06);
+      text-align:center;
+      margin-bottom:12px;
+      max-width:980px;
+      margin-left:auto;
+      margin-right:auto;
+      font-family:'Poppins',sans-serif;
+    ">
+      <!-- Profile image / initials -->
+      <div id="profileAvatar" style="margin-bottom:10px;">
+        <img id="profileAvatarImg" src="" style="width:88px;height:88px;border-radius:50%;object-fit:cover;box-shadow:0 6px 18px rgba(0,0,0,0.12);display:none;">
+        <div id="profileAvatarFallback" style="width:88px;height:88px;border-radius:50%;background:#e2e8f0;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:30px;color:#0f172a;">?</div>
+      </div>
+    
+      <!-- Name + About -->
+      <div id="profileName" style="font-size:1.15rem;font-weight:700;color:#0f172a;">You</div>
+      <div id="profileStatus" style="font-size:0.95rem;color:#475569;margin-top:6px;max-width:84%;">Hey there! I'm using InfinityChatter.</div>
+    
+      <!-- Edit buttons -->
+      <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap;justify-content:center;">
+        <button id="editProfileImageBtn" style="background:#0f172a;color:white;padding:8px 14px;border-radius:10px;border:none;cursor:pointer;font-weight:600">
+          Edit Profile Image
+        </button>
+        <button id="editAboutBtn" style="background:#0f172a;color:white;padding:8px 14px;border-radius:10px;border:none;cursor:pointer;font-weight:600">
+          Edit About
+        </button>
+      </div>
+    </div>
     <main class="inbox-main">
     </main>
   </div>
@@ -464,6 +500,74 @@
   };
 })();
 
+(() => {
+  // helper functions
+  const loadJSON = (k, f) => { try { return JSON.parse(localStorage.getItem(k)) || f; } catch { return f; } };
+  const saveJSON = (k, v) => localStorage.setItem(k, JSON.stringify(v));
+  const PROFILE_KEY = "infinity_profile";
+  const loadProfile = () => loadJSON(PROFILE_KEY, {});
+  const saveProfile = p => saveJSON(PROFILE_KEY, p);
+
+  function renderProfile() {
+    const p = loadProfile();
+    const avatar = p.avatar_url || "";
+    const name = p.name || "You";
+    const about = p.status || "Hey there! I'm using InfinityChatter.";
+
+    const img = document.getElementById("profileAvatarImg");
+    const fallback = document.getElementById("profileAvatarFallback");
+    const nameEl = document.getElementById("profileName");
+    const aboutEl = document.getElementById("profileStatus");
+
+    if (avatar) {
+      img.src = avatar;
+      img.style.display = "block";
+      fallback.style.display = "none";
+    } else {
+      img.style.display = "none";
+      fallback.style.display = "flex";
+      fallback.textContent = (name[0] || "?").toUpperCase();
+    }
+
+    nameEl.textContent = name;
+    aboutEl.textContent = about;
+  }
+
+  // handle button clicks
+  document.body.addEventListener("click", e => {
+    const id = e.target.id;
+    const profile = loadProfile();
+
+    if (id === "editProfileImageBtn") {
+      const inp = document.createElement("input");
+      inp.type = "file";
+      inp.accept = "image/*";
+      inp.onchange = ev => {
+        const file = ev.target.files[0];
+        if (!file) return;
+        const r = new FileReader();
+        r.onload = () => {
+          profile.avatar_url = r.result;
+          saveProfile(profile);
+          renderProfile();
+        };
+        r.readAsDataURL(file);
+      };
+      inp.click();
+    }
+
+    if (id === "editAboutBtn") {
+      const val = prompt("Edit About", profile.status || "");
+      if (val !== null) {
+        profile.status = val.trim();
+        saveProfile(profile);
+        renderProfile();
+      }
+    }
+  });
+
+  renderProfile();
+})();
 </script>
 </body>
 </html>
