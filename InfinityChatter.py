@@ -3140,12 +3140,22 @@ socket.on('connect_error', (err) => console.error('❌ socket connect_error', er
   const socket = (typeof cs !== 'undefined' && cs.socket)
     ? cs.socket
     : (typeof io === 'function' ? io({ transports: ['polling'] }) : null);
+  
   // Safe DOM refs (assigned on DOMContentLoaded)
   let emojiBtn, composer, textarea, micBtn, plusBtn, attachMenuVertical;
   let sendBtn, emojiDrawer, messagesEl, inputEl, composerEl, composerMain, panel;
   let incomingCallBanner, incomingCallerNameEl, acceptCallBtn, declineCallBtn;
   let inCallControls, btnHangup, btnMute, btnToggleVideo, btnSwitchCam;
   let panelGrid;
+    // Ensure global chat state exists
+    window.cs = window.cs || {};
+    window.cs.myName = window.cs.myName || (new URLSearchParams(location.search).get('username') || (() => {
+      try {
+        const el = document.getElementById('username') || document.querySelector('[data-username]');
+        return el ? (el.textContent || el.value || '') : '';
+      } catch(e) { return ''; }
+    })());
+    window.cs.lastId = window.cs.lastId || 0;
 
   cs.socket.on("connect", () => {
     if (cs.myName || window.username) {
@@ -3628,6 +3638,11 @@ window.sendMessage = sendMessage;
             console.error('socket new_message handler error', e);
           }
         });
+        const container = document.getElementById('.chat-wrap')
+        if (!container) {
+          console.warn('Messages container not found — aborting append.');
+          return; // avoid ReferenceError and stop further code that assumes container exists
+        }
         container.scrollTop = container.scrollHeight;
     }
 
@@ -7206,6 +7221,50 @@ def chat():
         heading_img=HEADING_IMG,
         peer_token=peer_token,
     )
+
+@app.route("/api/export_db")
+def api_export_db():
+    """Export entire database content for the logged-in user only."""
+    from flask import jsonify, session as flask_session
+    username = flask_session.get("username")
+    if not username:
+        return jsonify({"error": "not_logged_in"}), 401
+
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        dump = {}
+
+        # Export only the user's relevant rows
+        c.execute("SELECT * FROM users WHERE name=?", (username,))
+        dump["user"] = [dict(zip([d[0] for d in c.description], r)) for r in c.fetchall()]
+
+        c.execute("SELECT * FROM contacts WHERE owner=?", (username,))
+        dump["contacts"] = [dict(zip([d[0] for d in c.description], r)) for r in c.fetchall()]
+
+        c.execute("SELECT * FROM messages WHERE sender=?", (username,))
+        dump["messages_sent"] = [dict(zip([d[0] for d in c.description], r)) for r in c.fetchall()]
+
+        c.execute("SELECT * FROM messages WHERE sender != ?", (username,))
+        dump["messages_received"] = [dict(zip([d[0] for d in c.description], r)) for r in c.fetchall() if username in (r[1],)]
+
+        c.execute("SELECT * FROM calls WHERE caller=? OR callee=?", (username, username))
+        dump["calls"] = [dict(zip([d[0] for d in c.description], r)) for r in c.fetchall()]
+
+        c.execute("SELECT * FROM push_subscriptions WHERE username=?", (username,))
+        dump["push_subscriptions"] = [dict(zip([d[0] for d in c.description], r)) for r in c.fetchall()]
+
+        conn.close()
+
+        return jsonify({
+            "username": username,
+            "exported_at": int(__import__('time').time()),
+            "data": dump
+        })
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": "server_error", "details": str(e)}), 500
 
 @app.route("/send_composite_message", methods=["POST"])
 def send_composite_message():
