@@ -7784,19 +7784,14 @@ def api_set_session():
     if not username:
         return jsonify({"error": "missing username"}), 400
 
-    # Store username in Flask's signed session
     flask_session["username"] = username
-    current_app.logger.info(f"✅ Session set for {username}")
+    flask_session.modified = True  # 👈 forces cookie write
 
-    # Let Flask handle Set-Cookie automatically
-    resp = jsonify({"ok": True, "session_username": username})
-
-    # Add explicit CORS headers if frontend and backend are on same domain you can skip these
+    resp = make_response(jsonify({"ok": True, "session_username": username}))
     resp.headers["Access-Control-Allow-Credentials"] = "true"
     origin = request.headers.get("Origin")
     if origin and "onrender.com" in origin:
         resp.headers["Access-Control-Allow-Origin"] = origin
-
     return resp
 
 @app.route('/poll')
