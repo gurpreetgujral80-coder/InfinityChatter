@@ -364,31 +364,41 @@
     return d.toLocaleString();
   }
 
-  // --- fetch contacts (tries endpoint, then fallback to localStorage / global) ---
+  // --- fetch contacts (network-first with fallbacks) ---
   async function fetchContacts() {
-    // try network first
+    // 1️⃣ Try server API first
     try {
-      const res = await fetch('/api/contacts', { credentials: 'same-origin' });
+      const res = await fetch('/api/contacts', {
+        method: 'GET',
+        credentials: 'include', // ✅ ensures session cookies are sent
+        headers: { 'Accept': 'application/json' }
+      });
+  
       if (res.ok) {
         const data = await res.json().catch(() => ({}));
-        // try common shapes: { contacts: [...] } or [...]
-        if (Array.isArray(data)) return data;
-        if (data && Array.isArray(data.contacts)) return data.contacts;
-        // if single object with contacts property not present, attempt to return object as array
-        return data.contacts || [];
+        if (Array.isArray(data)) return data;               // e.g. server returns [...]
+        if (Array.isArray(data.contacts)) return data.contacts; // e.g. server returns { contacts: [...] }
+        return []; // unexpected shape
+      } else if (res.status === 401) {
+        console.warn('Unauthorized — user not logged in.');
+        return [];
+      } else {
+        console.warn('Failed to fetch contacts:', res.status);
       }
     } catch (err) {
-      // ignore — fallback next
+      console.warn('Network error fetching contacts:', err);
     }
-
-    // fallback: check global variable window.INFINITY_CONTACTS
-    if (Array.isArray(window.INFINITY_CONTACTS)) return window.INFINITY_CONTACTS;
-
-    // fallback: localStorage key (in case serverless app saved contacts client-side)
-    const stored = loadJSON(CONTACTS_KEY, null);
+  
+    // 2️⃣ Fallback to global variable
+    if (Array.isArray(window.INFINITY_CONTACTS)) {
+      return window.INFINITY_CONTACTS;
+    }
+  
+    // 3️⃣ Fallback to localStorage
+    const stored = loadJSON(CONTACTS_KEY, []);
     if (Array.isArray(stored)) return stored;
-
-    // final fallback: empty
+  
+    // 4️⃣ Final fallback — return empty
     return [];
   }
 
