@@ -7168,6 +7168,11 @@ def chat():
     peer_token = request.args.get('t') or request.args.get('peer')
     current_app.logger.info(f"Opening chat for {username} peer_token={peer_token}")
 
+    # ✅ Allow self-chat even if no peer_token / contacts exist
+    if not peer_token:
+        peer_token = f"self_{username}"
+        current_app.logger.info(f"Generated self-chat token for {username}: {peer_token}")
+
     # --- Step 6: Render chat page ---
     return render_template_string(
         CHAT_HTML,
