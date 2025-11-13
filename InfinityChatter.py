@@ -7789,20 +7789,8 @@ def api_set_session():
     flask_session["username"] = username
     current_app.logger.info(f"✅ Session set for {username}")
 
-    # Let Flask handle cookie creation automatically
-    resp = make_response(jsonify({"ok": True, "session_username": username}))
-
-    # Explicitly set attributes to ensure cross-site availability (Render, iOS Safari, etc.)
-    resp.set_cookie(
-        key=app.config.get("SESSION_COOKIE_NAME", "session"),
-        value=request.cookies.get(app.config.get("SESSION_COOKIE_NAME", "session"), ""),  # fallback empty string
-        samesite="None",
-        secure=True,
-        httponly=True,
-        path="/",
-        domain=".onrender.com"
-    )
-
+    # Let Flask handle the cookie automatically
+    resp = jsonify({"ok": True, "session_username": username})
     return resp
 
 @app.route('/poll')
