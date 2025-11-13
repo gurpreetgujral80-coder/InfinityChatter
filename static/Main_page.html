@@ -1202,59 +1202,101 @@
 
 </script>
 <script>
-(async function(){
+(() => {
+  const DB_NAME = 'InfinityChatterDB';
+  const DB_VERSION = 1;
+  let db;
 
-  const IDB_NAME = 'infinitychatter_full_db';
-  const STORE_NAME = 'full_dump';
+  // ---------- IndexedDB Setup ----------
+  const openDB = () => new Promise((resolve, reject) => {
+    const req = indexedDB.open(DB_NAME, DB_VERSION);
+    req.onupgradeneeded = (e) => {
+      const db = e.target.result;
+      if (!db.objectStoreNames.contains('users')) db.createObjectStore('users', { keyPath: 'username' });
+      if (!db.objectStoreNames.contains('contacts')) db.createObjectStore('contacts', { keyPath: 'id', autoIncrement: true });
+      if (!db.objectStoreNames.contains('messages')) db.createObjectStore('messages', { keyPath: 'id' });
+      if (!db.objectStoreNames.contains('calls')) db.createObjectStore('calls', { keyPath: 'id' });
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
 
-  // Open IndexedDB
-  function openDB(){
-    return new Promise((res,rej)=>{
-      const req = indexedDB.open(IDB_NAME,1);
-      req.onupgradeneeded = ev=>{
-        const db = ev.target.result;
-        if(!db.objectStoreNames.contains(STORE_NAME))
-          db.createObjectStore(STORE_NAME,{keyPath:'key'});
-      };
-      req.onsuccess=()=>res(req.result);
-      req.onerror=()=>rej(req.error);
+  // Save or update data in any store
+  const saveData = async (storeName, data) => {
+    if (!db) db = await openDB();
+    const tx = db.transaction(storeName, 'readwrite');
+    const store = tx.objectStore(storeName);
+    if (Array.isArray(data)) data.forEach(item => store.put(item));
+    else store.put(data);
+    return new Promise((res) => { tx.oncomplete = () => res(true); });
+  };
+
+  // Load all from a store
+  const loadData = async (storeName) => {
+    if (!db) db = await openDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(storeName, 'readonly');
+      const store = tx.objectStore(storeName);
+      const req = store.getAll();
+      req.onsuccess = () => resolve(req.result || []);
+      req.onerror = () => reject(req.error);
     });
-  }
+  };
 
-  async function saveToIndexedDB(data){
-    const db = await openDB();
-    const tx = db.transaction(STORE_NAME,'readwrite');
-    const store = tx.objectStore(STORE_NAME);
-    store.put({key:'export', savedAt:Date.now(), data});
-    return new Promise((res)=>{tx.oncomplete=()=>{db.close();res(true);}});
-  }
-
-  async function exportFullDatabase(){
+  // ---------- Sync Manager ----------
+  async function syncFromServer() {
     try {
-      const res = await fetch('/api/export_db', { credentials:'include' });
-      const json = await res.json();
-      if(!res.ok) throw new Error(json.error || 'export failed');
+      const [contactsRes, messagesRes] = await Promise.all([
+        fetch('/api/contacts', { credentials: 'include' }),
+        fetch('/api/messages', { credentials: 'include' })
+      ]);
 
-      // Save to IndexedDB + optional localStorage
-      await saveToIndexedDB(json);
-      localStorage.setItem('infinity_full_db', JSON.stringify(json));
-      console.log('💾 Full DB saved locally:', json);
+      const contacts = await contactsRes.json().catch(() => []);
+      const messages = await messagesRes.json().catch(() => []);
 
-      // Also offer file download as backup
-      const blob = new Blob([JSON.stringify(json,null,2)], {type:'application/json'});
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `InfinityChatter_DB_${json.username}_${new Date().toISOString().replace(/[:.]/g,'-')}.json`;
-      a.click();
-      URL.revokeObjectURL(url);
-    } catch(err){
-      console.error('DB export failed:', err);
+      if (contacts && Array.isArray(contacts.contacts))
+        await saveData('contacts', contacts.contacts);
+      if (messages && Array.isArray(messages.messages))
+        await saveData('messages', messages.messages);
+
+      console.log('🔄 Synced from server → local DB');
+    } catch (err) {
+      console.warn('⚠️ Offline or sync failed:', err);
     }
   }
 
-  // Run automatically after login
-  exportFullDatabase();
+  async function saveOutgoingMessage(messageObj) {
+    await saveData('messages', messageObj);
+    console.log('💾 Saved outgoing message locally');
+  }
+
+  // ---------- Auto-Sync on Events ----------
+  window.addEventListener('online', syncFromServer);
+  setInterval(syncFromServer, 1000 * 60 * 5); // every 5 minutes
+
+  // ---------- Make available globally ----------
+  window.LocalDB = {
+    openDB, saveData, loadData, syncFromServer, saveOutgoingMessage
+  };
+
+  // ---------- Initial Load ----------
+  (async () => {
+    db = await openDB();
+
+    // Auto-load previous data immediately (works offline)
+    const contacts = await loadData('contacts');
+    const messages = await loadData('messages');
+    console.log('📱 Loaded local DB:', { contacts, messages });
+
+    // Render contacts/messages immediately if available
+    if (contacts.length && typeof window.renderContacts === 'function')
+      window.renderContacts(contacts);
+    if (messages.length && typeof window.renderMessages === 'function')
+      window.renderMessages(messages);
+
+    // Then try syncing in background
+    syncFromServer();
+  })();
 
 })();
 </script>
