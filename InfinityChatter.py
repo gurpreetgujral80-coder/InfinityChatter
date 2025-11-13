@@ -7785,13 +7785,15 @@ def api_set_session():
         return jsonify({"error": "missing username"}), 400
 
     flask_session["username"] = username
-    flask_session.modified = True  # 👈 forces cookie write
+    flask_session.modified = True  # 🟢 ensures cookie write
+    current_app.logger.info(f"✅ Session cookie being set for {username}")
 
     resp = make_response(jsonify({"ok": True, "session_username": username}))
     resp.headers["Access-Control-Allow-Credentials"] = "true"
     origin = request.headers.get("Origin")
     if origin and "onrender.com" in origin:
         resp.headers["Access-Control-Allow-Origin"] = origin
+
     return resp
 
 @app.route('/poll')
