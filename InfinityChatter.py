@@ -3624,16 +3624,15 @@ window.sendMessage = sendMessage;
                 updateMessageStatus(m.id, 'seen');
               }
             }
-
-            // Auto-scroll to bottom
-            scrollChatToBottom();
-
           } catch (e) {
             console.error('socket new_message handler error', e);
           }
         });
+        container.scrollTop = container.scrollHeight;
     }
 
+  scrollChatToBottom();
+  
   // Attachment preview setter (exposed)
   function setAttachmentPreview(files){
     cs.stagedFiles = Array.from(files||[]);
@@ -5399,14 +5398,6 @@ window.sendMessage = sendMessage;
 
 })(); // end helper IIFE
 
-function scrollChatToBottom() {
-  const chatBox = document.getElementById('chatMessages') || document.querySelector('.messages');
-  if (!chatBox) return;
-  chatBox.scrollTop = chatBox.scrollHeight;
-}
-
-// Automatically scroll when chat loads
-document.addEventListener('DOMContentLoaded', scrollChatToBottom);
  /* ---------------------------
    Event wiring on DOMContentLoaded - single point of initialization
    --------------------------- */
@@ -7012,6 +7003,15 @@ window.addEventListener('message', (ev) => {
     });
   }
 });
+
+function scrollChatToBottom() {
+  const chatBox = document.getElementById('chatMessages') || document.querySelector('.messages');
+  if (!chatBox) return;
+  chatBox.scrollTop = chatBox.scrollHeight;
+}
+
+// Automatically scroll when chat loads
+document.addEventListener('DOMContentLoaded', scrollChatToBottom);
 
 </script>
 </body>
