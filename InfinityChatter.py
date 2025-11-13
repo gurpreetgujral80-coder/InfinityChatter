@@ -66,9 +66,7 @@ app.config.update({
     "SESSION_COOKIE_SECURE": is_render,
     "SESSION_COOKIE_HTTPONLY": True,
     "SESSION_COOKIE_PATH": "/",
-    "SESSION_COOKIE_DOMAIN": (
-        "infinitychatter-o7rw.onrender.com" if is_render else None
-    ),
+    "SESSION_COOKIE_DOMAIN": None
 })
 
 PORT = int(os.environ.get("PORT", 5004))
