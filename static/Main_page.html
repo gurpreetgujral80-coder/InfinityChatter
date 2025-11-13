@@ -685,8 +685,11 @@
     if (!list.some(c => (c.contact || '').toLowerCase() === 'self')) list.push(selfContact);
     list.sort((a, b) => (b.last_ts || 0) - (a.last_ts || 0));
   
-    // toggle add UI visibility
-    if (list.length <= 1) {
+    // Count only real contacts (exclude "self")
+    const realContacts = list.filter(c => (c.contact || '').toLowerCase() !== 'self');
+    
+    // Keep "Add Contacts" box visible until at least one real contact exists
+    if (realContacts.length === 0) {
       if (addBox) addBox.style.display = 'flex';
       removeHeaderAddButton();
     } else {
