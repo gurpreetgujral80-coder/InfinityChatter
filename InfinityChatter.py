@@ -7780,17 +7780,25 @@ def send_message():
 
 @app.route("/api/set_session", methods=["POST"])
 def api_set_session():
-    data = request.get_json(force=True)
+    data = request.get_json(force=True) or {}
     username = (data.get("username") or "").strip()
     if not username:
         return jsonify({"error": "missing username"}), 400
 
-    # Store username in Flask session
+    # Store username in Flask session (Flask will create and sign the cookie)
     flask_session["username"] = username
     current_app.logger.info(f"✅ Session set for {username}")
 
-    # Let Flask handle the cookie automatically
-    resp = jsonify({"ok": True, "session_username": username})
+    # Let Flask set the cookie automatically by returning a normal response
+    resp = make_response(jsonify({"ok": True, "session_username": username}))
+
+    # If you need to explicitly allow credentials for cross-site fetches,
+    # set these headers (do NOT use Access-Control-Allow-Origin: * when credentials=true)
+    # Replace the origin below with your frontend origin if your frontend is on different origin.
+    resp.headers["Access-Control-Allow-Credentials"] = "true"
+    # For debugging you may add the origin you expect; later set this to your real origin:
+    resp.headers["Access-Control-Allow-Origin"] = request.headers.get("Origin", "https://your-frontend.example")
+
     return resp
 
 @app.route('/poll')
