@@ -771,7 +771,7 @@
               method: 'POST',
               headers: {'Content-Type': 'application/json'},
               body: JSON.stringify({ username }),
-              credentials: 'same-origin'
+              credentials: 'include'
             });
             const j = await res.json().catch(() => ({}));
             console.log('✅ Session set response:', j);
