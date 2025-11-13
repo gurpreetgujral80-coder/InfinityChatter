@@ -2301,6 +2301,7 @@ CHAT_HTML = r'''<!doctype html>
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <meta name="apple-mobile-web-app-title" content="InfinityChatter">
   <meta name="mobile-web-app-capable" content="yes">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <script src="https://cdn.tailwindcss.com"></script>
 
   <!-- emoji-mart v5 browser build (exposes global EmojiMart for vanilla JS) -->
@@ -3625,8 +3626,7 @@ window.sendMessage = sendMessage;
             }
 
             // Auto-scroll to bottom
-            const container = document.getElementById('messages') || document.querySelector('.messages');
-            if (container) container.scrollTop = container.scrollHeight;
+            scrollChatToBottom();
 
           } catch (e) {
             console.error('socket new_message handler error', e);
@@ -5399,6 +5399,14 @@ window.sendMessage = sendMessage;
 
 })(); // end helper IIFE
 
+function scrollChatToBottom() {
+  const chatBox = document.getElementById('chatMessages') || document.querySelector('.messages');
+  if (!chatBox) return;
+  chatBox.scrollTop = chatBox.scrollHeight;
+}
+
+// Automatically scroll when chat loads
+document.addEventListener('DOMContentLoaded', scrollChatToBottom);
  /* ---------------------------
    Event wiring on DOMContentLoaded - single point of initialization
    --------------------------- */
