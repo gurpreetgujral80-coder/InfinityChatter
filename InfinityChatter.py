@@ -7782,15 +7782,26 @@ def api_set_session():
     if not username:
         return jsonify({"error": "missing username"}), 400
 
+    # Save to Flask session
     flask_session["username"] = username
-    flask_session.modified = True  # 🟢 ensures cookie write
-    current_app.logger.info(f"✅ Session cookie being set for {username}")
+    current_app.logger.info(f"✅ Session set for {username}")
 
-    resp = make_response(jsonify({"ok": True, "session_username": username}))
+    resp = jsonify({"ok": True, "session_username": username})
     resp.headers["Access-Control-Allow-Credentials"] = "true"
     origin = request.headers.get("Origin")
     if origin and "onrender.com" in origin:
         resp.headers["Access-Control-Allow-Origin"] = origin
+
+    # ✅ Make cookie available on all routes (/inbox, /chat, etc.)
+    resp.set_cookie(
+        key=app.config.get("SESSION_COOKIE_NAME", "session"),
+        value=request.cookies.get(app.config.get("SESSION_COOKIE_NAME", "session"), ""),
+        samesite="None",
+        secure=True,
+        httponly=True,
+        path="/",
+        domain=".onrender.com"
+    )
 
     return resp
 
