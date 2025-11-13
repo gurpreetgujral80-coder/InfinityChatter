@@ -7132,27 +7132,39 @@ def api_current_user():
 @app.route("/chat")
 def chat():
     from flask import request, redirect, url_for, render_template_string, current_app
+    import sqlite3
 
-    # --- Step 1: Try to get from session ---
-    username = flask_session.get('username')
+    # --- Step 1: Try to get username from session ---
+    username = flask_session.get("username")
 
     # --- Step 2: If not logged in, allow ?username= for dev/testing ---
     if not username:
-        q_user = request.args.get('username')
+        q_user = request.args.get("username")
         if q_user:
-            flask_session['username'] = q_user
+            flask_session["username"] = q_user
             username = q_user
             current_app.logger.info(f"[DEV] Auto-set session username via query param: {q_user}")
 
-    # --- Step 3: Redirect if still missing (production guard) ---
+    # --- Step 3: Redirect if still missing ---
     if not username:
-        return redirect(url_for('index'))
+        current_app.logger.warning("❌ No username in session or query, redirecting to index.")
+        return redirect(url_for("index"))
 
-    # --- Step 4: Load user and safety check ---
+    # --- Step 4: Load or auto-create user record ---
     user = load_user_by_name(username)
     if not user:
-        return redirect(url_for('index'))
+        current_app.logger.warning(f"⚠️ User '{username}' not found in DB — auto-creating.")
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        c.execute(
+            "INSERT OR IGNORE INTO users (name, status, avatar, is_owner, is_partner) VALUES (?, ?, ?, 0, 0)",
+            (username, "Hey there! I'm using InfinityChatter.", None),
+        )
+        conn.commit()
+        conn.close()
+        user = load_user_by_name(username)
 
+    # --- Step 5: Gather ownership info ---
     owner = get_owner()
     partner = get_partner()
     is_owner = user.get("is_owner", False)
@@ -7161,31 +7173,30 @@ def chat():
     partner_name = partner["name"] if partner else None
     is_member = is_owner or is_partner
 
-    # Mark active presence
+    # --- Step 6: Mark user presence ---
     touch_user_presence(username)
 
-    # --- Step 5: Read peer token for the chat (from ?t=xxxx or ?peer=) ---
-    peer_token = request.args.get('t') or request.args.get('peer')
-    current_app.logger.info(f"Opening chat for {username} peer_token={peer_token}")
-
-    # ✅ Allow self-chat even if no peer_token / contacts exist
+    # --- Step 7: Read peer token (for chat or self) ---
+    peer_token = request.args.get("t") or request.args.get("peer")
     if not peer_token:
         peer_token = f"self_{username}"
         current_app.logger.info(f"Generated self-chat token for {username}: {peer_token}")
 
-    # --- Step 6: Render chat page ---
+    current_app.logger.info(f"Opening chat for {username} peer_token={peer_token}")
+
+    # --- Step 8: Render chat page ---
     return render_template_string(
         CHAT_HTML,
         username=username,
-        user_status=user.get('status', ''),
-        user_avatar=user.get('avatar', ''),
+        user_status=user.get("status", ""),
+        user_avatar=user.get("avatar", ""),
         is_owner=is_owner,
         is_partner=is_partner,
         owner_name=owner_name,
         partner_name=partner_name,
         is_member=is_member,
         heading_img=HEADING_IMG,
-        peer_token=peer_token
+        peer_token=peer_token,
     )
 
 @app.route("/send_composite_message", methods=["POST"])
