@@ -1841,31 +1841,35 @@
   });
 })();
 
-// 🔥 Force-final-render after loadContacts completes
+// 🔥 Final SAFE render that does NOT depend on loadContacts()
+
 async function forceFinalRenderFix() {
   console.log("📌 Final render fix started");
 
-  // Wait for loadContacts() to run
-  try {
-    await loadContacts();   // <-- ensure contacts are loaded first
-  } catch (e) {
-    console.warn("📌 loadContacts failed inside final fix", e);
-  }
-
-  // Now FINAL_CONTACTS should exist
   const container = document.getElementById("contactsContainer");
   console.log("📌 Final render: container =", container);
   console.log("📌 FINAL_CONTACTS =", window.FINAL_CONTACTS);
 
+  // Wait a bit for merging logic to populate FINAL_CONTACTS
+  let tries = 0;
+  while (!window.FINAL_CONTACTS && tries < 20) {
+    await new Promise(res => setTimeout(res, 50));
+    tries++;
+  }
+
+  console.log("📌 FINAL_CONTACTS after wait =", window.FINAL_CONTACTS);
+
   if (container && Array.isArray(window.FINAL_CONTACTS)) {
     console.log("📌 Rendering FINAL_CONTACTS now:", window.FINAL_CONTACTS);
     renderContacts(window.FINAL_CONTACTS);
+  } else {
+    console.warn("📌 FINAL_CONTACTS missing after wait — nothing to render");
   }
 }
 
-// Run after everything else
 window.addEventListener("load", () => {
-  setTimeout(forceFinalRenderFix, 300); // small delay ensures full boot
+  console.log("📌 Window loaded — forcing final render");
+  setTimeout(forceFinalRenderFix, 50);
 });
 
 </script>
