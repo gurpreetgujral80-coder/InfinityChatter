@@ -761,7 +761,7 @@
   
           // Ensure server session is set before redirecting
           try {
-            const res = await fetch('/api/set_session', {
+            const res = await fetch(window.location.origin + '/api/set_session', {
               method: 'POST',
               headers: {'Content-Type': 'application/json'},
               body: JSON.stringify({ username }),
@@ -1202,89 +1202,511 @@
 
 </script>
 <script>
-(() => {
-  const DB_NAME = 'InfinityChatterDB';
+(function () {
+  const API_ORIGIN = window.location.origin.replace(/\/$/, '');
+  const DB_NAME = 'infinity_offline_v1';
   const DB_VERSION = 1;
-  let db;
+  const CONTACTS_STORE = 'contacts';
+  const STATUSES_STORE = 'statuses';
+  const MESSAGES_STORE = 'messages';
+  const OUTBOX_STORE = 'outbox';
+  const META_STORE = 'meta';
 
-  // ---------- IndexedDB Setup ----------
-  const openDB = () => new Promise((resolve, reject) => {
-    const req = indexedDB.open(DB_NAME, DB_VERSION);
-    req.onupgradeneeded = (e) => {
-      const db = e.target.result;
-      if (!db.objectStoreNames.contains('users')) db.createObjectStore('users', { keyPath: 'username' });
-      if (!db.objectStoreNames.contains('contacts')) db.createObjectStore('contacts', { keyPath: 'id', autoIncrement: true });
-      if (!db.objectStoreNames.contains('messages')) db.createObjectStore('messages', { keyPath: 'id' });
-    };
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
-  });
+  const SYNC_INTERVAL_MS = 20 * 1000; // background sync tick (20s). Adjust as needed.
+  const RETRY_BASE_MS = 2000; // 2s base for exponential backoff
 
-  async function saveData(store, data) {
-    if (!db) db = await openDB();
-    const tx = db.transaction(store, 'readwrite');
-    const st = tx.objectStore(store);
-    if (Array.isArray(data)) data.forEach(d => st.put(d)); else st.put(data);
-    return new Promise(r => tx.oncomplete = r);
-  }
-
-  async function loadData(store) {
-    if (!db) db = await openDB();
+  // ---------- Simple IndexedDB helper ----------
+  function openDB() {
     return new Promise((resolve, reject) => {
-      const tx = db.transaction(store, 'readonly');
-      const st = tx.objectStore(store);
-      const req = st.getAll();
-      req.onsuccess = () => resolve(req.result || []);
+      const req = indexedDB.open(DB_NAME, DB_VERSION);
+      req.onupgradeneeded = (ev) => {
+        const db = ev.target.result;
+        if (!db.objectStoreNames.contains(CONTACTS_STORE)) {
+          db.createObjectStore(CONTACTS_STORE, { keyPath: 'id', autoIncrement: true });
+          db.createObjectStore(CONTACTS_STORE + '_by_contact', { keyPath: 'contact' });
+        }
+        if (!db.objectStoreNames.contains(STATUSES_STORE)) {
+          const s = db.createObjectStore(STATUSES_STORE, { keyPath: 'id' });
+          s.createIndex('by_expiresAt', 'expiresAt', { unique: false });
+          s.createIndex('by_author', 'author', { unique: false });
+        }
+        if (!db.objectStoreNames.contains(MESSAGES_STORE)) {
+          const s = db.createObjectStore(MESSAGES_STORE, { keyPath: 'id' });
+          s.createIndex('by_chat', 'chatToken', { unique: false });
+          s.createIndex('by_ts', 'ts', { unique: false });
+        }
+        if (!db.objectStoreNames.contains(OUTBOX_STORE)) {
+          db.createObjectStore(OUTBOX_STORE, { keyPath: 'id' });
+        }
+        if (!db.objectStoreNames.contains(META_STORE)) {
+          db.createObjectStore(META_STORE, { keyPath: 'k' });
+        }
+      };
+      req.onsuccess = () => resolve(req.result);
       req.onerror = () => reject(req.error);
     });
   }
 
-  // ---------- Sync from Server ----------
-  async function syncFromServer() {
+  async function idbPut(store, value) {
+    const db = await openDB();
+    return new Promise((res, rej) => {
+      const tx = db.transaction([store], 'readwrite');
+      tx.objectStore(store).put(value);
+      tx.oncomplete = () => res(true);
+      tx.onerror = () => rej(tx.error);
+    });
+  }
+  async function idbGet(store, key) {
+    const db = await openDB();
+    return new Promise((res, rej) => {
+      const tx = db.transaction([store], 'readonly');
+      const r = tx.objectStore(store).get(key);
+      r.onsuccess = () => res(r.result);
+      r.onerror = () => rej(r.error);
+    });
+  }
+  async function idbDelete(store, key) {
+    const db = await openDB();
+    return new Promise((res, rej) => {
+      const tx = db.transaction([store], 'readwrite');
+      tx.objectStore(store).delete(key);
+      tx.oncomplete = () => res(true);
+      tx.onerror = () => rej(tx.error);
+    });
+  }
+  async function idbGetAll(store) {
+    const db = await openDB();
+    return new Promise((res, rej) => {
+      const tx = db.transaction([store], 'readonly');
+      const r = tx.objectStore(store).getAll();
+      r.onsuccess = () => res(r.result || []);
+      r.onerror = () => rej(r.error);
+    });
+  }
+  async function idbClear(store) {
+    const db = await openDB();
+    return new Promise((res, rej) => {
+      const tx = db.transaction([store], 'readwrite');
+      tx.objectStore(store).clear();
+      tx.oncomplete = () => res(true);
+      tx.onerror = () => rej(tx.error);
+    });
+  }
+
+  // ---------- Helpers ----------
+  function now() { return Date.now(); }
+  function log(...args) { console.log('[OfflineSync]', ...args); }
+  function apiPath(path) { return API_ORIGIN + (path.startsWith('/') ? path : '/' + path); }
+  function isOnline() { return navigator.onLine; }
+
+  // ---------- Outbox queue management ----------
+  async function enqueueOutbox(item) {
+    // item should have: type ('message'|'status'|'contacts_sync'), payload, retryCount, ts
+    item.id = item.id || ('o-' + now() + '-' + Math.random().toString(36).slice(2,8));
+    item.retryCount = item.retryCount || 0;
+    item.ts = item.ts || now();
+    await idbPut(OUTBOX_STORE, item);
+    window.dispatchEvent(new CustomEvent('offline-outbox-changed'));
+    return item;
+  }
+
+  async function getOutboxAll() {
+    return (await idbGetAll(OUTBOX_STORE)).sort((a,b)=>a.ts-b.ts);
+  }
+
+  async function removeOutboxItem(id) {
+    await idbDelete(OUTBOX_STORE, id);
+    window.dispatchEvent(new CustomEvent('offline-outbox-changed'));
+  }
+
+  // ---------- Contacts API sync ----------
+  async function fetchServerContacts() {
     try {
-      const res = await fetch('/api/contacts', { credentials: 'include' });
-      if (!res.ok) throw new Error(res.statusText);
-      const data = await res.json();
-      const contacts = Array.isArray(data) ? data : (data.contacts || []);
-      if (contacts.length) {
-        await saveData('contacts', contacts);
-        console.log('✅ Synced contacts from server:', contacts.length);
+      const res = await fetch(apiPath('/api/contacts'), { credentials: 'include' });
+      if (!res.ok) {
+        log('fetchServerContacts non-ok status', res.status);
+        throw new Error('server_err');
       }
-      if (typeof window.renderContacts === 'function') {
-        window.renderContacts(contacts);
-      }
+      return await res.json();
     } catch (err) {
-      console.warn('⚠️ Contact sync failed:', err);
-      // fallback from local DB if offline
-      const localContacts = await loadData('contacts');
-      console.log('📦 Loaded local contacts:', localContacts.length);
-      if (typeof window.renderContacts === 'function') {
-        window.renderContacts(localContacts);
-      }
+      log('fetchServerContacts failed', err);
+      return null;
     }
   }
 
-  // ---------- On startup ----------
-  (async () => {
-    db = await openDB();
-
-    // 1️⃣ Load locally cached contacts first (instant)
-    const cachedContacts = await loadData('contacts');
-    if (cachedContacts.length && typeof window.renderContacts === 'function') {
-      console.log('📱 Rendering cached contacts:', cachedContacts.length);
-      window.renderContacts(cachedContacts);
+  async function syncContactsDown() {
+    // Fetch contacts from server and persist to IndexedDB
+    const data = await fetchServerContacts();
+    if (!data || !Array.isArray(data.contacts)) return false;
+    // Clear old & insert new list (you can do smarter diff if needed)
+    await idbClear(CONTACTS_STORE);
+    // We'll store items with a stable `contact` property if present
+    for (const c of data.contacts) {
+      const o = Object.assign({}, c, { storedAt: now() });
+      // try to ensure a key 'contact' for quick lookup
+      if (!o.contact && o.contact_name) o.contact = (o.contact_name || '').toString();
+      await idbPut(CONTACTS_STORE, o);
     }
+    window.dispatchEvent(new CustomEvent('offline-contacts-updated'));
+    log('syncContactsDown: saved', data.contacts.length);
+    return true;
+  }
 
-    // 2️⃣ Then refresh from server
-    await syncFromServer();
+  // ---------- Statuses ----------
+  async function postStatusToServer(statusPayload) {
+    // payload: { id, author, text, media:[], createdAt, expiresAt }
+    try {
+      const res = await fetch(apiPath('/api/statuses'), { // you must implement server endpoint /api/statuses
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(statusPayload)
+      });
+      if (!res.ok) throw new Error('status_post_failed:' + res.status);
+      return await res.json();
+    } catch (e) {
+      log('postStatusToServer failed', e);
+      throw e;
+    }
+  }
 
-    // 3️⃣ Auto re-sync every 5 min or on reconnect
-    window.addEventListener('online', syncFromServer);
-    setInterval(syncFromServer, 1000 * 60 * 5);
-  })();
+  async function syncStatusesDown() {
+    // Endpoint /api/statuses (GET) should return { statuses: [...] }
+    try {
+      const res = await fetch(apiPath('/api/statuses'), { credentials: 'include' });
+      if (!res.ok) throw new Error('statuses_down_failed');
+      const j = await res.json();
+      if (!Array.isArray(j.statuses)) return false;
+      // replace existing statuses store
+      await idbClear(STATUSES_STORE);
+      for (const s of j.statuses) {
+        await idbPut(STATUSES_STORE, s);
+      }
+      window.dispatchEvent(new CustomEvent('offline-statuses-updated'));
+      log('syncStatusesDown saved', j.statuses.length);
+      return true;
+    } catch (err) {
+      log('syncStatusesDown failed', err);
+      return false;
+    }
+  }
 
-  // Expose global for debugging
-  window.LocalDB = { openDB, saveData, loadData, syncFromServer };
+  // ---------- Messages ----------
+  // Save inbound message to local DB (avoids duplicating for self)
+  async function saveIncomingMessage(msg) {
+    // msg: { id, chatToken, sender, text, ts, attachments, delivered, seenBy }
+    if (!msg || !msg.id) {
+      // create synthetic id
+      msg.id = 'm-' + now() + '-' + Math.random().toString(36).slice(2,8);
+    }
+    await idbPut(MESSAGES_STORE, msg);
+    window.dispatchEvent(new CustomEvent('offline-messages-updated', { detail: { chatToken: msg.chatToken }}));
+    return msg;
+  }
+
+  async function getMessagesForChat(chatToken, limit=200) {
+    // naive scanning - can be optimized by index cursor
+    const all = await idbGetAll(MESSAGES_STORE);
+    return all.filter(m => m.chatToken === chatToken).sort((a,b)=> (a.ts||0)-(b.ts||0)).slice(-limit);
+  }
+
+  // ---------- Outgoing message sending ----------
+  async function sendMessageNow(payload) {
+    // payload: { chatToken, text, attachments, localId (optional), ts }
+    try {
+      const res = await fetch(apiPath('/api/send_message'), {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      if (!res.ok) throw new Error('send_failed:' + res.status);
+      const js = await res.json();
+      return js;
+    } catch (err) {
+      throw err;
+    }
+  }
+
+  // process a single outbox entry
+  async function processOutboxItem(item) {
+    // item: { id, type, payload, retryCount }
+    try {
+      if (item.type === 'message') {
+        const p = item.payload;
+        // prevent accidentally storing outgoing message into "self" chat on server or local (if recipient==self)
+        const isSelfChat = (p.chatToken || '').startsWith('self_') || p.chatToken === 'self';
+        if (isSelfChat) {
+          // If self-chat, save locally but avoid sending to server unless you want it persisted on server.
+          // We'll mark delivered locally and remove from outbox.
+          const localMsg = Object.assign({}, {
+            id: 'local-' + now() + '-' + Math.random().toString(36).slice(2,8),
+            chatToken: p.chatToken,
+            sender: p.sender || (window.INFINITY_PROFILE && window.INFINITY_PROFILE.name) || 'You',
+            text: p.text || '',
+            ts: p.ts || now(),
+            attachments: p.attachments || [],
+            outgoing: true,
+            delivered: true
+          });
+          await idbPut(MESSAGES_STORE, localMsg);
+          await removeOutboxItem(item.id);
+          return { ok: true, local: true };
+        } else {
+          // Attempt immediate send
+          const serverResp = await sendMessageNow(item.payload);
+          // expected server to return message id / saved message object
+          if (serverResp && (serverResp.ok || serverResp.message || serverResp.id)) {
+            // save server message copy locally
+            const saved = serverResp.message || serverResp;
+            saved.chatToken = saved.chatToken || item.payload.chatToken;
+            saved.ts = saved.ts || now();
+            await idbPut(MESSAGES_STORE, saved);
+            await removeOutboxItem(item.id);
+            return { ok: true, saved };
+          } else {
+            throw new Error('server_no_ack');
+          }
+        }
+      } else if (item.type === 'status') {
+        await postStatusToServer(item.payload);
+        // optionally server responds with stored status — ignore for now
+        await removeOutboxItem(item.id);
+        return { ok: true };
+      } else if (item.type === 'contacts_sync') {
+        // we can POST contacts to server if you have endpoint
+        const res = await fetch(apiPath('/api/contacts/sync'), {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(item.payload)
+        });
+        if (!res.ok) throw new Error('contacts_sync_failed:' + res.status);
+        await removeOutboxItem(item.id);
+        return { ok: true };
+      } else {
+        // unknown type - remove to avoid blocking
+        await removeOutboxItem(item.id);
+        return { ok: true, removed: true };
+      }
+    } catch (err) {
+      // update retry count and backoff schedule
+      const newCount = (item.retryCount || 0) + 1;
+      item.retryCount = newCount;
+      item.lastError = (err && err.message) || String(err);
+      item.nextAttemptAt = now() + Math.pow(2, Math.min(newCount, 8)) * RETRY_BASE_MS;
+      await idbPut(OUTBOX_STORE, item);
+      log('processOutboxItem failed, scheduled retry', { id: item.id, nextAttemptAt: item.nextAttemptAt, err: item.lastError });
+      return { ok: false, err: item.lastError };
+    }
+  }
+
+  // process outbox queue (send eligible items)
+  let _processingOutbox = false;
+  async function processOutboxQueue() {
+    if (_processingOutbox) return;
+    _processingOutbox = true;
+    try {
+      if (!isOnline()) {
+        _processingOutbox = false;
+        return;
+      }
+      const list = await getOutboxAll();
+      for (const item of list) {
+        // skip until its nextAttemptAt
+        if (item.nextAttemptAt && item.nextAttemptAt > now()) continue;
+        await processOutboxItem(item);
+      }
+    } catch (err) {
+      log('processOutboxQueue error', err);
+    } finally {
+      _processingOutbox = false;
+    }
+  }
+
+  // ---------- Periodic sync loop ----------
+  let _syncLoopHandle = null;
+  async function syncTick() {
+    // prune expired statuses in local store
+    try {
+      const allStatuses = await idbGetAll(STATUSES_STORE);
+      const nowTs = now();
+      for (const s of allStatuses) {
+        if (s.expiresAt && s.expiresAt <= nowTs) {
+          await idbDelete(STATUSES_STORE, s.id);
+        }
+      }
+    } catch (e) { /* ignore */ }
+
+    // If online, attempt:
+    if (isOnline()) {
+      // 1) push outbox
+      await processOutboxQueue();
+      // 2) pull contacts
+      await syncContactsDown();
+      // 3) pull statuses & messages (if server endpoints exist)
+      await syncStatusesDown();
+      // 4) pull new messages endpoint (if available)
+      await pullNewMessages();
+    }
+  }
+
+  function startSyncLoop() {
+    if (_syncLoopHandle) clearInterval(_syncLoopHandle);
+    _syncLoopHandle = setInterval(syncTick, SYNC_INTERVAL_MS);
+    // immediate tick
+    setTimeout(syncTick, 400);
+  }
+
+  function stopSyncLoop() {
+    if (_syncLoopHandle) clearInterval(_syncLoopHandle);
+    _syncLoopHandle = null;
+  }
+
+  // ---------- Pull messages from server (expects /api/messages?since=TS&peer=token or global) ----------
+  async function pullNewMessages() {
+    try {
+      // read last seen ts from meta
+      const meta = await idbGet(META_STORE, 'lastPulledAt') || { k: 'lastPulledAt', v: 0 };
+      const since = meta.v || 0;
+      // endpoint must support since param and return { messages: [ ... ] }
+      const res = await fetch(apiPath('/api/messages?since=' + encodeURIComponent(since || 0)), { credentials: 'include' });
+      if (!res.ok) {
+        log('pullNewMessages non-ok', res.status);
+        return;
+      }
+      const j = await res.json();
+      if (!j || !Array.isArray(j.messages)) return;
+      for (const m of j.messages) {
+        // save each message locally
+        await saveIncomingMessage(m);
+      }
+      // update lastPulledAt
+      const newTs = now();
+      await idbPut(META_STORE, { k: 'lastPulledAt', v: newTs });
+      log('pullNewMessages saved', j.messages.length);
+    } catch (err) {
+      log('pullNewMessages failed', err);
+    }
+  }
+
+  // ---------- Public API helpers ----------
+  const OfflineSync = {
+    // init: register SW (optional), start sync loop, restore any server state
+    async init({ registerServiceWorker = true, swPath = '/service-worker.js' } = {}) {
+      // register service worker if available & desired
+      if ('serviceWorker' in navigator && registerServiceWorker) {
+        try {
+          const reg = await navigator.serviceWorker.register(swPath);
+          log('service worker registered', reg.scope);
+        } catch (e) {
+          log('service worker registration failed', e);
+        }
+      }
+
+      // listen for network changes & visibility
+      window.addEventListener('online', () => {
+        log('online event');
+        syncTick();
+      });
+      window.addEventListener('offline', () => log('offline event'));
+
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible') syncTick();
+      });
+
+      // initial load of local contacts/statuses into memory
+      const localContacts = await idbGetAll(CONTACTS_STORE);
+      window.dispatchEvent(new CustomEvent('offline-contacts-loaded', { detail: localContacts }));
+
+      // start periodic sync
+      startSyncLoop();
+      // also do immediate sync
+      try { await syncTick(); } catch (e) {}
+      log('OfflineSync initialized');
+      return this;
+    },
+
+    // Contacts
+    async getContacts() { return await idbGetAll(CONTACTS_STORE); },
+    async addLocalContact(contactObj) {
+      // contactObj: { contact, contact_name, phone, avatar, source, added_at }
+      const o = Object.assign({}, contactObj, { storedAt: now() });
+      await idbPut(CONTACTS_STORE, o);
+      window.dispatchEvent(new CustomEvent('offline-contacts-updated'));
+      // enqueue to outbox for server sync (optional)
+      await enqueueOutbox({ type: 'contacts_sync', payload: o });
+      return o;
+    },
+
+    // Statuses
+    async getStatuses() { return await idbGetAll(STATUSES_STORE); },
+    async postStatus(statusPayload) {
+      // statusPayload: { id?, author, text, media, createdAt?, expiresAt? }
+      statusPayload.createdAt = statusPayload.createdAt || now();
+      statusPayload.expiresAt = statusPayload.expiresAt || (statusPayload.createdAt + 24*60*60*1000);
+      statusPayload.id = statusPayload.id || 'st-' + statusPayload.createdAt + '-' + Math.random().toString(36).slice(2,6);
+      await idbPut(STATUSES_STORE, statusPayload);
+      // enqueue to outbox
+      await enqueueOutbox({ type: 'status', payload: statusPayload });
+      window.dispatchEvent(new CustomEvent('offline-statuses-updated'));
+      return statusPayload;
+    },
+
+    // Messages
+    async getMessages(chatToken, limit) { return await getMessagesForChat(chatToken, limit || 500); },
+
+    async sendMessage(payload) {
+      // payload must contain: chatToken, text, sender, attachments[], ts
+      payload.ts = payload.ts || now();
+      // store a local 'pending' copy (local id)
+      const localMsg = Object.assign({}, {
+        id: 'local-' + payload.ts + '-' + Math.random().toString(36).slice(2,6),
+        chatToken: payload.chatToken,
+        sender: payload.sender || (window.INFINITY_PROFILE && window.INFINITY_PROFILE.name) || 'You',
+        text: payload.text || '',
+        ts: payload.ts,
+        attachments: payload.attachments || [],
+        outgoing: true,
+        delivered: false
+      });
+      await idbPut(MESSAGES_STORE, localMsg);
+      // push into outbox
+      await enqueueOutbox({ type: 'message', payload: payload });
+      window.dispatchEvent(new CustomEvent('offline-messages-updated', { detail: { chatToken: payload.chatToken }}));
+      // attempt immediate delivery
+      if (isOnline()) await processOutboxQueue();
+      return localMsg;
+    },
+
+    // Force sync now
+    async forceSync() { return await syncTick(); },
+
+    // expose raw db helper if needed (for debugging)
+    _raw: { idbGetAll, idbGet, idbPut, idbDelete, idbClear, getOutboxAll }
+  };
+
+  // expose globally
+  window.OfflineSync = OfflineSync;
+
+  // Auto-init (you can remove this and init manually with OfflineSync.init())
+  setTimeout(() => OfflineSync.init().catch(e=>log('init failed', e)), 300);
+
+  // small compatibility shim: ensure app can read local contacts via localStorage fallback
+  // Mirror DB contacts into localStorage periodically so old code calling localStorage works
+  async function mirrorContactsToLocalStorage() {
+    try {
+      const c = await idbGetAll(CONTACTS_STORE);
+      localStorage.setItem('infinity_contacts', JSON.stringify(c));
+      window.dispatchEvent(new CustomEvent('offline-contacts-mirrored', { detail: c }));
+    } catch (e) { /* ignore */ }
+  }
+  setInterval(mirrorContactsToLocalStorage, 5000);
+  setTimeout(mirrorContactsToLocalStorage, 1500);
+
+  // small compatibility: expose loadStatuses/loadContacts hooks used in your code
+  window.loadStatuses = window.loadStatuses || (async () => (await OfflineSync.getStatuses()) || []);
+  window.loadContacts = window.loadContacts || (async () => (await OfflineSync.getContacts()) || []);
 
 })();
 </script>
