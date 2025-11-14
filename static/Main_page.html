@@ -1370,27 +1370,6 @@
     }
   }
 
-  async function syncStatusesDown() {
-    // Endpoint /api/statuses (GET) should return { statuses: [...] }
-    try {
-      const res = await fetch(apiPath('/api/statuses'), { credentials: 'include' });
-      if (!res.ok) throw new Error('statuses_down_failed');
-      const j = await res.json();
-      if (!Array.isArray(j.statuses)) return false;
-      // replace existing statuses store
-      await idbClear(STATUSES_STORE);
-      for (const s of j.statuses) {
-        await idbPut(STATUSES_STORE, s);
-      }
-      window.dispatchEvent(new CustomEvent('offline-statuses-updated'));
-      log('syncStatusesDown saved', j.statuses.length);
-      return true;
-    } catch (err) {
-      log('syncStatusesDown failed', err);
-      return false;
-    }
-  }
-
   // ---------- Messages ----------
   // Save inbound message to local DB (avoids duplicating for self)
   async function saveIncomingMessage(msg) {
@@ -1544,8 +1523,6 @@
       await processOutboxQueue();
       // 2) pull contacts
       await syncContactsDown();
-      // 3) pull statuses & messages (if server endpoints exist)
-      await syncStatusesDown();
       // 4) pull new messages endpoint (if available)
       await pullNewMessages();
     }
@@ -1593,7 +1570,7 @@
   // ---------- Public API helpers ----------
   const OfflineSync = {
     // init: register SW (optional), start sync loop, restore any server state
-    async init({ registerServiceWorker = true, swPath = '/service-worker.js' } = {}) {
+    async init({ registerServiceWorker = true, swPath = '/sw.js' } = {}) {
       // register service worker if available & desired
       if ('serviceWorker' in navigator && registerServiceWorker) {
         try {
