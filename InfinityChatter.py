@@ -226,6 +226,40 @@ def save_push_sub():
         conn.close()
     return jsonify({"ok": True})
 
+@app.route('/api/messages')
+def api_messages():
+    try:
+        since = int(request.args.get('since', 0))
+
+        conn = db_conn()
+        c = conn.cursor()
+
+        c.execute("""
+            SELECT id, sender, text, attachments, created_at
+            FROM messages
+            WHERE id > ?
+            ORDER BY id ASC
+        """, (since,))
+
+        rows = c.fetchall()
+        conn.close()
+
+        return jsonify({
+            "messages": [
+                {
+                    "id": r[0],
+                    "sender": r[1],
+                    "text": r[2],
+                    "attachments": json.loads(r[3] or "[]"),
+                    "created_at": r[4]
+                }
+                for r in rows
+            ]
+        })
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 @app.route('/static/sw.js')
 def serve_sw():
     try:
