@@ -1797,80 +1797,94 @@
 
 })();
 
-// ===============================
-// 🔥 FINAL CONTACT RENDER FIX
-// ===============================
-(function finalRenderFix() {
-  console.log("📌 Final render fix loaded");
+(function finalContactsPatch(){
+  console.log('⚙️ contacts_final_render_fix loaded');
 
-  function tryRender() {
-    const container = document.getElementById("contactsContainer");
+  function getContainer(){
+    return document.getElementById('contactsContainer')
+        || document.getElementById('contactsList')
+        || document.querySelector('.contacts')
+        || document.querySelector('#contacts')
+        || null;
+  }
 
-    console.log("📌 Checking container:", container);
-    console.log("📌 FINAL_CONTACTS:", window.FINAL_CONTACTS);
+  function ensureSelfEntry(list){
+    try{
+      const profile = JSON.parse(localStorage.getItem('infinity_profile') || '{}');
+      const username = (profile.name || profile.username || 'You').toString();
+      const selfEntry = {
+        name: `${username} (You)`,
+        contact: 'self',
+        last_text: 'Message Yourself',
+        last_ts: Math.floor(Date.now()/1000),
+        avatar_url: profile.avatar_url || profile.avatar || null
+      };
+      if (!Array.isArray(list)) list = [];
+      if (!list.some(c => (c.contact || '').toLowerCase() === 'self')) list.unshift(selfEntry);
+      return list;
+    } catch (e) {
+      return list || [];
+    }
+  }
 
+  async function tryRenderOnce(){
+    const container = getContainer();
     if (!container) {
-      console.warn("⏳ contactsContainer not ready, retrying...");
+      // still not in DOM
+      return false;
+    }
+    if (typeof renderContacts !== 'function') {
+      // app's renderer not ready yet
       return false;
     }
 
-    if (typeof renderContacts !== "function") {
-      console.warn("⏳ renderContacts not ready, retrying...");
-      return false;
+    let list = window.FINAL_CONTACTS;
+    if (!Array.isArray(list) || list.length === 0) {
+      try {
+        const stored = JSON.parse(localStorage.getItem('infinity_contacts') || '[]');
+        list = ensureSelfEntry(stored);
+      } catch (e) {
+        list = ensureSelfEntry([]);
+      }
+      // persist rebuilt contacts so other code can use it
+      window.FINAL_CONTACTS = list;
+      localStorage.setItem('infinity_contacts', JSON.stringify(list));
+      console.log('⚙️ Rebuilt FINAL_CONTACTS from localStorage or fallback:', list);
     }
 
-    const list = window.FINAL_CONTACTS || [];
-    console.log("📌 Rendering contacts now:", list);
-    renderContacts(list);
-    return true;
+    try {
+      renderContacts(list);
+      console.log('⚙️ renderContacts invoked by contacts_final_render_fix');
+      return true;
+    } catch (e) {
+      console.warn('⚠️ renderContacts threw:', e);
+      return false;
+    }
   }
 
-  // Try multiple times (DOM / async safe)
+  // Try repeatedly until success (gives the rest of the page time to initialize)
   let attempts = 0;
-  const interval = setInterval(() => {
+  const maxAttempts = 30;
+  const intervalMs = 200;
+  const poller = setInterval(async () => {
     attempts++;
-    if (tryRender() || attempts > 20) {
-      clearInterval(interval);
+    const ok = await tryRenderOnce();
+    if (ok || attempts > maxAttempts) {
+      clearInterval(poller);
+      if (!ok) console.warn('contacts_final_render_fix: giving up after', attempts, 'attempts');
     }
-  }, 200);
+  }, intervalMs);
 
-  // Final fallback after full page load
-  window.addEventListener("load", () => {
-    console.log("📌 Window loaded — forcing final render");
-    tryRender();
+  // Final safety pass after load
+  window.addEventListener('load', () => {
+    setTimeout(() => tryRenderOnce(), 50);
   });
+
+  // Manual trigger
+  window.forceContactsRender = async function(){
+    return tryRenderOnce();
+  };
 })();
-
-// 🔥 Final SAFE render that does NOT depend on loadContacts()
-
-async function forceFinalRenderFix() {
-  console.log("📌 Final render fix started");
-
-  const container = document.getElementById("contactsContainer");
-  console.log("📌 Final render: container =", container);
-  console.log("📌 FINAL_CONTACTS =", window.FINAL_CONTACTS);
-
-  // Wait a bit for merging logic to populate FINAL_CONTACTS
-  let tries = 0;
-  while (!window.FINAL_CONTACTS && tries < 20) {
-    await new Promise(res => setTimeout(res, 50));
-    tries++;
-  }
-
-  console.log("📌 FINAL_CONTACTS after wait =", window.FINAL_CONTACTS);
-
-  if (container && Array.isArray(window.FINAL_CONTACTS)) {
-    console.log("📌 Rendering FINAL_CONTACTS now:", window.FINAL_CONTACTS);
-    renderContacts(window.FINAL_CONTACTS);
-  } else {
-    console.warn("📌 FINAL_CONTACTS missing after wait — nothing to render");
-  }
-}
-
-window.addEventListener("load", () => {
-  console.log("📌 Window loaded — forcing final render");
-  setTimeout(forceFinalRenderFix, 50);
-});
 
 </script>
 </body>
