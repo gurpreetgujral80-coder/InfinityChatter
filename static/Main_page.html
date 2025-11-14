@@ -139,6 +139,17 @@
     <div class="nav-item" id="nav-settings" data-id="settings" data-path="/settings"><div>Settings</div></div>
   </div>
 <script>
+(async () => {
+  const profile = JSON.parse(localStorage.getItem('infinity_profile') || '{}');
+  if (profile && profile.username) {
+    await fetch('/api/set_session', {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: profile.username })
+    });
+  }
+})();
 (async function(){
   // Requires cs.socket or window.socket for socket.io if you use it
   const socket = window.socket || (window.cs && cs.socket);
@@ -1547,7 +1558,7 @@
       const meta = await idbGet(META_STORE, 'lastPulledAt') || { k: 'lastPulledAt', v: 0 };
       const since = meta.v || 0;
       // endpoint must support since param and return { messages: [ ... ] }
-      const res = await fetch(apiPath('/api/messages?since=' + encodeURIComponent(since || 0)), { credentials: 'include' });
+      const res = await fetch(apiPath('/api/send_messages?since=' + encodeURIComponent(since || 0)), { credentials: 'include' });
       if (!res.ok) {
         log('pullNewMessages non-ok', res.status);
         return;
@@ -1570,7 +1581,7 @@
   // ---------- Public API helpers ----------
   const OfflineSync = {
     // init: register SW (optional), start sync loop, restore any server state
-    async init({ registerServiceWorker = true, swPath = '/sw.js' } = {}) {
+    async init({ registerServiceWorker = true, swPath = 'static/sw.js' } = {}) {
       // register service worker if available & desired
       if ('serviceWorker' in navigator && registerServiceWorker) {
         try {
