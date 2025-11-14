@@ -64,7 +64,7 @@ is_render = "onrender.com" in os.environ.get("RENDER_EXTERNAL_HOSTNAME", "") or 
 app.config.update({
     "SESSION_COOKIE_SAMESITE": "None" if is_render else "Lax",
     "SESSION_COOKIE_SECURE": is_render,
-    "SESSION_COOKIE_HTTPONLY": True,
+    "SESSION_COOKIE_HTTPONLY": False,
     "SESSION_COOKIE_PATH": "/",
     "SESSION_COOKIE_DOMAIN": None
 })
@@ -72,7 +72,7 @@ app.config.update({
 PORT = int(os.environ.get("PORT", 5004))
 DB_PATH = os.path.join(os.path.dirname(__file__), "Asphalt_legends.db")
 HEADING_IMG = "/static/heading.png"  # place your heading image here
-MAX_MESSAGES = 100
+MAX_MESSAGES = 1000000
 ALLOWED_IMAGE_EXT = {"png", "jpg", "jpeg", "gif", "webp", "svg"}
 ALLOWED_VIDEO_EXT = {"mp4", "webm", "ogg"}
 ALLOWED_AUDIO_EXT = {"mp3", "wav", "ogg", "m4a", "webm"}
@@ -7768,95 +7768,40 @@ def handle_vote_poll(data):
 
 @app.route('/send_message', methods=['POST'])
 def send_message():
-    """
-    Accepts JSON { text, sender?, attachments? } and stores the message to DB.
-    Returns the stored message object (with id) and broadcasts it via SocketIO.
-    Also sends a push notification (title=sender, body="Notification").
-    """
     try:
         data = request.get_json() or {}
+
         text = (data.get('text') or "").strip()
         attachments = data.get('attachments') or []
 
-        # Prefer authenticated flask_session username when available
-        sender = data.get('sender') or flask_session.get('username') or data.get('from') or 'Unknown'
+        # NEW: who is this message for?
+        peer = data.get("peer") or data.get("token")
+        if not peer:
+            return jsonify({"error": "missing_peer"}), 400
 
-        if not text and (not attachments or len(attachments) == 0):
+        sender = flask_session.get('username') or data.get('sender') or "Unknown"
+
+        if not text and not attachments:
             return jsonify({'error': 'Empty message'}), 400
 
-        # Patch avatar if user has one
-        avatar = None
-        try:
-            user = load_user_by_name(sender)
-            if user:
-                avatar = user.get('avatar')
-                if avatar and not avatar.startswith('/') and re.match(r'^m\d+\.(webp|png|jpg|jpeg)$', avatar, re.I):
-                    if avatar.lower() != 'm47.webp':  # skip m47 intentionally
-                        avatar = f'/static/{avatar}'
-        except Exception:
-            avatar = None
-
-        # Save message to DB
         message = save_message(sender, text, attachments)
-        if not message:
-            return jsonify({'error': 'Failed to save message'}), 500
+        message["peer"] = peer
 
-        # Inject avatar into message object for frontend
-        message['avatar'] = avatar
+        # patch avatar
+        user = load_user_by_name(sender)
+        if user:
+            avatar = user.get("avatar")
+            if avatar and re.match(r'^m\d+\.(webp|png|jpg|jpeg)$', avatar, re.I):
+                message["avatar"] = f"/static/{avatar}"
 
-        # Broadcast to all connected SocketIO clients
-        try:
-            socketio.emit('new_message', message)
-        except Exception:
-            app.logger.exception("socket emit failed for new_message")
+        # broadcast only to clients in this thread
+        socketio.emit("new_message", message)
 
-        # ✅ PUSH NOTIFICATION LOGIC (inside try block)
-        payload = {
-            "title": sender,         # notification title = sender name
-            "body": "Notification",  # fixed message body (not actual text)
-            "icon": message.get("avatar") or "/static/default-avatar.png",
-            "url": f"/?open_chat={sender}"
-        }
-
-        # find push subscriptions for recipients (here: all users except sender)
-        conn = db_conn()
-        c = conn.cursor()
-        c.execute("SELECT id, username, subscription FROM push_subscriptions WHERE username != ?", (sender,))
-        rows = c.fetchall()
-        conn.close()
-
-        for sub_id, sub_username, sub_json in rows:
-            try:
-                subscription = json.loads(sub_json)
-            except Exception:
-                # malformed -> remove
-                conn = db_conn()
-                c = conn.cursor()
-                c.execute("DELETE FROM push_subscriptions WHERE id=?", (sub_id,))
-                conn.commit()
-                conn.close()
-                continue
-
-            # skip if recipient is currently online
-            if sub_username and sub_username in ONLINE_USERS:
-                continue
-
-            resp = send_web_push(subscription, payload)
-
-            # if resp indicates gone (410/404) remove
-            if resp is False or (isinstance(resp, int) and resp in (404, 410)):
-                conn = db_conn()
-                c = conn.cursor()
-                c.execute("DELETE FROM push_subscriptions WHERE id=?", (sub_id,))
-                conn.commit()
-                conn.close()
-
-        # ✅ Everything inside try; function ends cleanly
-        return jsonify({'ok': True, 'message': message}), 200
+        return jsonify({"ok": True, "message": message})
 
     except Exception as e:
-        app.logger.exception('send_message error')
-        return jsonify({'error': str(e)}), 500
+        app.logger.exception("send_message error")
+        return jsonify({"error": str(e)}), 500
 
 @app.route("/api/set_session", methods=["POST"])
 def api_set_session():
