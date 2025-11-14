@@ -1886,6 +1886,25 @@
   };
 })();
 
+// --- Make self-contact visible even when it's the only one ---
+(function fixSelfChatVisibility(){
+    const container = document.getElementById("contactsContainer");
+    const addBox = document.getElementById("addContactsBox");
+
+    if (!container) return;
+
+    // The renderer put only 1 contact → self chat
+    // Many themes hide the contact list if only 1 exists, so force-visible:
+    container.style.display = "block";
+    container.style.visibility = "visible";
+    container.style.opacity = "1";
+
+    // Keep "add contact" box visible per your requirement:
+    if (addBox) addBox.style.display = "flex";
+
+    console.log("✔️ Self chat visibility patched");
+})();
+
 </script>
 </body>
 </html>
