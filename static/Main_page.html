@@ -1213,488 +1213,457 @@
 
 </script>
 <script>
-(function () {
-  const API_ORIGIN = window.location.origin.replace(/\/$/, '');
+/* ===== InfinityChatter — Offline DB + Sync (IndexedDB) =====
+   Drop this entire block into your HTML (after your other scripts).
+   Exposes `window.OfflineDB` with methods and auto-sync behavior.
+*/
+(function(){
   const DB_NAME = 'infinity_offline_v1';
   const DB_VERSION = 1;
-  const CONTACTS_STORE = 'contacts';
-  const STATUSES_STORE = 'statuses';
-  const MESSAGES_STORE = 'messages';
-  const OUTBOX_STORE = 'outbox';
-  const META_STORE = 'meta';
+  const STORE_MESSAGES = 'messages';
+  const STORE_CONTACTS = 'contacts';
+  const STORE_STATUSES = 'statuses';
+  const STORE_OUTBOX = 'outbox';
+  const STORE_META = 'meta';
 
-  const SYNC_INTERVAL_MS = 20 * 1000; // background sync tick (20s). Adjust as needed.
-  const RETRY_BASE_MS = 2000; // 2s base for exponential backoff
+  const SYNC_INTERVAL_MS = 30 * 1000; // try every 30s (adjust)
+  const BACKOFF_BASE = 2000;
 
-  // ---------- Simple IndexedDB helper ----------
-  function openDB() {
+  // --- tiny promisified IndexedDB wrapper ---
+  function openDB(){
     return new Promise((resolve, reject) => {
       const req = indexedDB.open(DB_NAME, DB_VERSION);
       req.onupgradeneeded = (ev) => {
-        const db = ev.target.result;
-        if (!db.objectStoreNames.contains(CONTACTS_STORE)) {
-          db.createObjectStore(CONTACTS_STORE, { keyPath: 'id', autoIncrement: true });
-          db.createObjectStore(CONTACTS_STORE + '_by_contact', { keyPath: 'contact' });
+        const db = req.result;
+        if (!db.objectStoreNames.contains(STORE_MESSAGES)) {
+          const s = db.createObjectStore(STORE_MESSAGES, { keyPath: 'id' });
+          s.createIndex('created_at', 'created_at');
         }
-        if (!db.objectStoreNames.contains(STATUSES_STORE)) {
-          const s = db.createObjectStore(STATUSES_STORE, { keyPath: 'id' });
-          s.createIndex('by_expiresAt', 'expiresAt', { unique: false });
-          s.createIndex('by_author', 'author', { unique: false });
+        if (!db.objectStoreNames.contains(STORE_CONTACTS)) {
+          db.createObjectStore(STORE_CONTACTS, { keyPath: 'contact' });
         }
-        if (!db.objectStoreNames.contains(MESSAGES_STORE)) {
-          const s = db.createObjectStore(MESSAGES_STORE, { keyPath: 'id' });
-          s.createIndex('by_chat', 'chatToken', { unique: false });
-          s.createIndex('by_ts', 'ts', { unique: false });
+        if (!db.objectStoreNames.contains(STORE_STATUSES)) {
+          db.createObjectStore(STORE_STATUSES, { keyPath: 'id' });
+          db.createIndex('createdAt', 'createdAt');
         }
-        if (!db.objectStoreNames.contains(OUTBOX_STORE)) {
-          db.createObjectStore(OUTBOX_STORE, { keyPath: 'id' });
+        if (!db.objectStoreNames.contains(STORE_OUTBOX)) {
+          db.createObjectStore(STORE_OUTBOX, { keyPath: 'oid', autoIncrement: true });
         }
-        if (!db.objectStoreNames.contains(META_STORE)) {
-          db.createObjectStore(META_STORE, { keyPath: 'k' });
+        if (!db.objectStoreNames.contains(STORE_META)) {
+          db.createObjectStore(STORE_META, { keyPath: 'key' });
         }
       };
-      req.onsuccess = () => resolve(req.result);
-      req.onerror = () => reject(req.error);
+      req.onsuccess = ()=> resolve(req.result);
+      req.onerror = ()=> reject(req.error);
     });
   }
 
-  async function idbPut(store, value) {
+  async function withStore(storeName, mode, fn){
     const db = await openDB();
     return new Promise((res, rej) => {
-      const tx = db.transaction([store], 'readwrite');
-      tx.objectStore(store).put(value);
-      tx.oncomplete = () => res(true);
-      tx.onerror = () => rej(tx.error);
-    });
-  }
-  async function idbGet(store, key) {
-    const db = await openDB();
-    return new Promise((res, rej) => {
-      const tx = db.transaction([store], 'readonly');
-      const r = tx.objectStore(store).get(key);
-      r.onsuccess = () => res(r.result);
-      r.onerror = () => rej(r.error);
-    });
-  }
-  async function idbDelete(store, key) {
-    const db = await openDB();
-    return new Promise((res, rej) => {
-      const tx = db.transaction([store], 'readwrite');
-      tx.objectStore(store).delete(key);
-      tx.oncomplete = () => res(true);
-      tx.onerror = () => rej(tx.error);
-    });
-  }
-  async function idbGetAll(store) {
-    const db = await openDB();
-    return new Promise((res, rej) => {
-      const tx = db.transaction([store], 'readonly');
-      const r = tx.objectStore(store).getAll();
-      r.onsuccess = () => res(r.result || []);
-      r.onerror = () => rej(r.error);
-    });
-  }
-  async function idbClear(store) {
-    const db = await openDB();
-    return new Promise((res, rej) => {
-      const tx = db.transaction([store], 'readwrite');
-      tx.objectStore(store).clear();
-      tx.oncomplete = () => res(true);
-      tx.onerror = () => rej(tx.error);
+      const tx = db.transaction(storeName, mode);
+      const store = tx.objectStore(storeName);
+      try {
+        const rv = fn(store);
+        tx.oncomplete = () => res(rv);
+        tx.onerror = () => rej(tx.error);
+      } catch (e) { rej(e); }
     });
   }
 
-  // ---------- Helpers ----------
-  function now() { return Date.now(); }
-  function log(...args) { console.log('[OfflineSync]', ...args); }
-  function apiPath(path) { return API_ORIGIN + (path.startsWith('/') ? path : '/' + path); }
-  function isOnline() { return navigator.onLine; }
-
-  // ---------- Outbox queue management ----------
-  async function enqueueOutbox(item) {
-    // item should have: type ('message'|'status'|'contacts_sync'), payload, retryCount, ts
-    item.id = item.id || ('o-' + now() + '-' + Math.random().toString(36).slice(2,8));
-    item.retryCount = item.retryCount || 0;
-    item.ts = item.ts || now();
-    await idbPut(OUTBOX_STORE, item);
-    window.dispatchEvent(new CustomEvent('offline-outbox-changed'));
-    return item;
+  // --- utility meta getter/setter ---
+  async function metaGet(key){ 
+    return withStore(STORE_META, 'readonly', store => new Promise((resolve) => {
+      const r = store.get(key);
+      r.onsuccess = ()=> resolve(r.result ? r.result.value : null);
+      r.onerror = ()=> resolve(null);
+    }));
+  }
+  async function metaSet(key, value){
+    return withStore(STORE_META, 'readwrite', store => store.put({ key, value }));
   }
 
-  async function getOutboxAll() {
-    return (await idbGetAll(OUTBOX_STORE)).sort((a,b)=>a.ts-b.ts);
-  }
+  // --- basic local save/load APIs ---
+  const OfflineDB = {
+    _syncTimer: null,
+    _syncAttempts: 0,
+    _isSyncing: false,
+    _onSyncStart: null,
+    _onSyncEnd: null,
 
-  async function removeOutboxItem(id) {
-    await idbDelete(OUTBOX_STORE, id);
-    window.dispatchEvent(new CustomEvent('offline-outbox-changed'));
-  }
+    async init(){
+      // warm DB
+      await openDB();
+      // auto-start sync loop and online listener
+      window.addEventListener('online', () => { this.syncNow().catch(()=>{}); });
+      this._startPeriodicSync();
+      console.info('OfflineDB initialized');
+      // auto attempt initial sync
+      this.syncNow().catch(()=>{});
+    },
 
-  // ---------- Contacts API sync ----------
-  async function fetchServerContacts() {
-    try {
-      const res = await fetch(apiPath('/api/contacts'), { credentials: 'include' });
-      if (!res.ok) {
-        log('fetchServerContacts non-ok status', res.status);
-        throw new Error('server_err');
+    // ---------- Messages ----------
+    async saveMessageLocal(msg){
+      // msg must have `id` (string/number) or we generate a local id; must have created_at unix ts (ms)
+      const entry = Object.assign({}, msg);
+      if (!entry.id) entry.id = 'local-' + Date.now() + '-' + Math.random().toString(36).slice(2,8);
+      if (!entry.created_at) entry.created_at = Date.now();
+      await withStore(STORE_MESSAGES, 'readwrite', s => s.put(entry));
+      // if outgoing (no server id) queue for sending
+      if (!this._looksServerMessage(entry)) {
+        await this.enqueueOutbox({ type: 'message', payload: entry });
       }
-      return await res.json();
-    } catch (err) {
-      log('fetchServerContacts failed', err);
-      return null;
-    }
-  }
+      return entry;
+    },
 
-  async function syncContactsDown() {
-    // Fetch contacts from server and persist to IndexedDB
-    const data = await fetchServerContacts();
-    if (!data || !Array.isArray(data.contacts)) return false;
-    // Clear old & insert new list (you can do smarter diff if needed)
-    await idbClear(CONTACTS_STORE);
-    // We'll store items with a stable `contact` property if present
-    for (const c of data.contacts) {
-      const o = Object.assign({}, c, { storedAt: now() });
-      // try to ensure a key 'contact' for quick lookup
-      if (!o.contact && o.contact_name) o.contact = (o.contact_name || '').toString();
-      await idbPut(CONTACTS_STORE, o);
-    }
-    window.dispatchEvent(new CustomEvent('offline-contacts-updated'));
-    log('syncContactsDown: saved', data.contacts.length);
-    return true;
-  }
+    async getMessages({ since = 0, limit = 1000 } = {}){
+      return withStore(STORE_MESSAGES, 'readonly', store => new Promise((resolve) => {
+        const out = [];
+        const idx = store.index ? store.index('created_at') : null;
+        const cursorSource = idx || store;
+        const req = cursorSource.openCursor(null, 'prev'); // newest-first
+        req.onsuccess = e => {
+          const cur = e.target.result;
+          if (!cur) return resolve(out);
+          const v = cur.value;
+          if (v.created_at >= since) out.push(v);
+          if (out.length >= limit) return resolve(out);
+          cur.continue();
+        };
+        req.onerror = ()=> resolve(out);
+      }));
+    },
 
-  // ---------- Statuses ----------
-  async function postStatusToServer(statusPayload) {
-    // payload: { id, author, text, media:[], createdAt, expiresAt }
-    try {
-      const res = await fetch(apiPath('/api/statuses'), { // you must implement server endpoint /api/statuses
-        method: 'POST',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(statusPayload)
-      });
-      if (!res.ok) throw new Error('status_post_failed:' + res.status);
-      return await res.json();
-    } catch (e) {
-      log('postStatusToServer failed', e);
-      throw e;
-    }
-  }
+    // ---------- Contacts ----------
+    async saveContactLocal(contact){
+      // contact: { contact: uniqueId, name, phone, avatar, added_at }
+      const entry = Object.assign({}, contact);
+      if (!entry.contact) entry.contact = entry.contact_name || entry.phone || ('c-'+Date.now());
+      if (!entry.added_at) entry.added_at = Date.now();
+      await withStore(STORE_CONTACTS, 'readwrite', s => s.put(entry));
+      // notify server (enqueue)
+      await this.enqueueOutbox({ type: 'contact', payload: entry });
+      return entry;
+    },
 
-  // ---------- Messages ----------
-  // Save inbound message to local DB (avoids duplicating for self)
-  async function saveIncomingMessage(msg) {
-    // msg: { id, chatToken, sender, text, ts, attachments, delivered, seenBy }
-    if (!msg || !msg.id) {
-      // create synthetic id
-      msg.id = 'm-' + now() + '-' + Math.random().toString(36).slice(2,8);
-    }
-    await idbPut(MESSAGES_STORE, msg);
-    window.dispatchEvent(new CustomEvent('offline-messages-updated', { detail: { chatToken: msg.chatToken }}));
-    return msg;
-  }
+    async listContacts(){
+      return withStore(STORE_CONTACTS, 'readonly', store => new Promise((resolve) => {
+        const arr = [];
+        const req = store.openCursor();
+        req.onsuccess = e => {
+          const cur = e.target.result;
+          if (!cur) return resolve(arr);
+          arr.push(cur.value);
+          cur.continue();
+        };
+        req.onerror = ()=> resolve(arr);
+      }));
+    },
 
-  async function getMessagesForChat(chatToken, limit=200) {
-    // naive scanning - can be optimized by index cursor
-    const all = await idbGetAll(MESSAGES_STORE);
-    return all.filter(m => m.chatToken === chatToken).sort((a,b)=> (a.ts||0)-(b.ts||0)).slice(-limit);
-  }
+    // ---------- Statuses ----------
+    async saveStatusLocal(status){
+      // status: { id, author, avatar, text, media[], createdAt, expiresAt }
+      const entry = Object.assign({}, status);
+      if (!entry.id) entry.id = 's-' + Date.now() + '-' + Math.random().toString(36).slice(2,8);
+      if (!entry.createdAt) entry.createdAt = Date.now();
+      if (!entry.expiresAt) entry.expiresAt = entry.createdAt + (24*60*60*1000);
+      await withStore(STORE_STATUSES, 'readwrite', s => s.put(entry));
+      await this.enqueueOutbox({ type: 'status', payload: entry });
+      return entry;
+    },
 
-  // ---------- Outgoing message sending ----------
-  async function sendMessageNow(payload) {
-    // payload: { chatToken, text, attachments, localId (optional), ts }
-    try {
-      const res = await fetch(apiPath('/api/send_message'), {
-        method: 'POST',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
-      if (!res.ok) throw new Error('send_failed:' + res.status);
-      const js = await res.json();
-      return js;
-    } catch (err) {
-      throw err;
-    }
-  }
+    async listStatuses(){
+      return withStore(STORE_STATUSES, 'readonly', store => new Promise((resolve) => {
+        const items = [];
+        const req = store.openCursor(null, 'prev');
+        req.onsuccess = e => {
+          const cur = e.target.result;
+          if (!cur) return resolve(items);
+          const v = cur.value;
+          // prune expired client-side here optionally
+          if (!v.expiresAt || v.expiresAt > Date.now()) items.push(v);
+          cur.continue();
+        };
+        req.onerror = ()=> resolve(items);
+      }));
+    },
 
-  // process a single outbox entry
-  async function processOutboxItem(item) {
-    // item: { id, type, payload, retryCount }
-    try {
-      if (item.type === 'message') {
-        const p = item.payload;
-        // prevent accidentally storing outgoing message into "self" chat on server or local (if recipient==self)
-        const isSelfChat = (p.chatToken || '').startsWith('self_') || p.chatToken === 'self';
-        if (isSelfChat) {
-          // If self-chat, save locally but avoid sending to server unless you want it persisted on server.
-          // We'll mark delivered locally and remove from outbox.
-          const localMsg = Object.assign({}, {
-            id: 'local-' + now() + '-' + Math.random().toString(36).slice(2,8),
-            chatToken: p.chatToken,
-            sender: p.sender || (window.INFINITY_PROFILE && window.INFINITY_PROFILE.name) || 'You',
-            text: p.text || '',
-            ts: p.ts || now(),
-            attachments: p.attachments || [],
-            outgoing: true,
-            delivered: true
-          });
-          await idbPut(MESSAGES_STORE, localMsg);
-          await removeOutboxItem(item.id);
-          return { ok: true, local: true };
-        } else {
-          // Attempt immediate send
-          const serverResp = await sendMessageNow(item.payload);
-          // expected server to return message id / saved message object
-          if (serverResp && (serverResp.ok || serverResp.message || serverResp.id)) {
-            // save server message copy locally
-            const saved = serverResp.message || serverResp;
-            saved.chatToken = saved.chatToken || item.payload.chatToken;
-            saved.ts = saved.ts || now();
-            await idbPut(MESSAGES_STORE, saved);
-            await removeOutboxItem(item.id);
-            return { ok: true, saved };
+    // ---------- Outbox (queued actions to push to server) ----------
+    async enqueueOutbox(op){
+      // op: { type: 'message'|'contact'|'status', payload: {...} }
+      await withStore(STORE_OUTBOX, 'readwrite', s => s.add({
+        op,
+        created_at: Date.now()
+      }));
+      // attempt immediate push
+      this.syncNow().catch(()=>{});
+    },
+
+    async _drainOutboxOnce(){
+      // send out all queued operations in order
+      const ops = await withStore(STORE_OUTBOX, 'readonly', s => new Promise((resolve) => {
+        const arr = [];
+        const req = s.openCursor();
+        req.onsuccess = e => {
+          const cur = e.target.result;
+          if (!cur) return resolve(arr);
+          arr.push({ key: cur.primaryKey, value: cur.value });
+          cur.continue();
+        };
+        req.onerror = ()=> resolve(arr);
+      }));
+
+      for (const item of ops) {
+        const { key, value } = item;
+        try {
+          const op = value.op;
+          if (op.type === 'message') {
+            // call send endpoint
+            const payload = {
+              text: op.payload.text || '',
+              attachments: op.payload.attachments || [],
+              // server will prefer session username, but include sender as fallback
+              sender: op.payload.sender || (localStorage.getItem('infinity_profile') ? JSON.parse(localStorage.getItem('infinity_profile')).name : undefined)
+            };
+            const res = await fetch('/send_message', {
+              method: 'POST',
+              credentials: 'include',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(payload)
+            });
+            if (!res.ok) throw new Error('send_failed');
+            const j = await res.json().catch(()=>null);
+            // server returns stored message; replace local entry ID if server returned id
+            if (j && j.message && j.message.id) {
+              // put server version into messages store
+              const serverMsg = Object.assign({}, j.message);
+              await withStore(STORE_MESSAGES, 'readwrite', s => s.put(serverMsg));
+            }
+            // remove outbox entry
+            await withStore(STORE_OUTBOX, 'readwrite', s => s.delete(key));
+          } else if (op.type === 'contact') {
+            // send contact up to /api/contacts (POST)
+            await fetch('/api/contacts', {
+              method: 'POST',
+              credentials: 'include',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(op.payload)
+            }).then(r => { if (!r.ok) throw new Error('contact_sync_failed'); });
+            await withStore(STORE_OUTBOX, 'readwrite', s => s.delete(key));
+          } else if (op.type === 'status') {
+            // POST to /api/statuses if your server supports it (fallback: ignore)
+            await fetch('/api/statuses', {
+              method: 'POST',
+              credentials: 'include',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(op.payload)
+            }).then(r => { if (!r.ok) throw new Error('status_sync_failed'); });
+            await withStore(STORE_OUTBOX, 'readwrite', s => s.delete(key));
           } else {
-            throw new Error('server_no_ack');
+            // unknown op -> drop
+            await withStore(STORE_OUTBOX, 'readwrite', s => s.delete(key));
+          }
+        } catch (err) {
+          // stop draining on first failure (keeps ordering), try later
+          console.warn('OfflineDB: drainOutbox failed, will retry later', err);
+          throw err;
+        }
+      }
+      return true;
+    },
+
+    // ---------- Sync down (pull new content from server) ----------
+    async _pullFromServer(){
+      // fetch contacts, messages since last timestamp, statuses
+      try {
+        // 1) contacts
+        const contactsRes = await fetch('/api/contacts', { credentials: 'include' });
+        if (contactsRes.ok) {
+          const j = await contactsRes.json().catch(()=>null);
+          const contacts = j && j.contacts ? j.contacts : (Array.isArray(j) ? j : []);
+          for (const c of contacts) {
+            // normalize: require contact field
+            const row = {
+              contact: c.contact || c.contact_name || (c.phone || 'unknown-'+Math.random().toString(36).slice(2,6)),
+              name: c.contact_name || c.name || '',
+              phone: c.phone || '',
+              avatar_url: c.avatar || c.avatar_url || '',
+              added_at: c.added_at || Date.now()
+            };
+            await withStore(STORE_CONTACTS, 'readwrite', s => s.put(row));
+          }
+        } else {
+          if (contactsRes.status === 401) throw new Error('not_logged_in');
+          // else ignore
+        }
+
+        // 2) messages: pull since last known server created_at
+        let lastMsgTs = await metaGet('last_server_msg_ts') || 0;
+        // server expects seconds maybe; we send ms and server should normalize — use since=lastMsgTs (ms)
+        const messagesRes = await fetch('/api/messages?since=' + encodeURIComponent(lastMsgTs), { credentials: 'include' });
+        if (messagesRes.ok) {
+          const j = await messagesRes.json().catch(()=>null);
+          const msgs = j && j.messages ? j.messages : (Array.isArray(j) ? j : []);
+          for (const m of msgs) {
+            // ensure required fields
+            const mm = Object.assign({}, m);
+            if (!mm.id) mm.id = 'srv-' + (mm.created_at || mm.id || Date.now());
+            // prefer created_at field (ms)
+            mm.created_at = mm.created_at || mm.createdAt || Date.now();
+            await withStore(STORE_MESSAGES, 'readwrite', s => s.put(mm));
+            // update last server ts
+            if ((mm.created_at || 0) > (lastMsgTs || 0)) lastMsgTs = mm.created_at;
+          }
+          if (lastMsgTs) await metaSet('last_server_msg_ts', lastMsgTs);
+        } else {
+          if (messagesRes.status === 404) {
+            // server doesn't support messages endpoint, skip gracefully
+          } else if (messagesRes.status === 401) throw new Error('not_logged_in');
+        }
+
+        // 3) statuses
+        const statusesRes = await fetch('/api/statuses', { credentials: 'include' });
+        if (statusesRes.ok) {
+          const j = await statusesRes.json().catch(()=>null);
+          const sts = j && j.statuses ? j.statuses : (Array.isArray(j) ? j : []);
+          for (const s of sts) {
+            const ss = Object.assign({}, s);
+            if (!ss.id) ss.id = 'srv-' + Date.now() + '-' + Math.random().toString(36).slice(2,6);
+            ss.createdAt = ss.createdAt || ss.created_at || Date.now();
+            await withStore(STORE_STATUSES, 'readwrite', store => store.put(ss));
+          }
+        } else {
+          // no statuses endpoint => ignore
+        }
+
+        return true;
+      } catch (err) {
+        // bubble up 401 etc to be handled by caller
+        throw err;
+      }
+    },
+
+    // main sync sequence: push local outbox then pull server
+    async syncNow(){
+      if (this._isSyncing) return;
+      this._isSyncing = true;
+      this._syncAttempts++;
+      if (typeof this._onSyncStart === 'function') this._onSyncStart();
+      try {
+        // drain outbox (push local changes) with retries
+        let attempt = 0;
+        while (true) {
+          try {
+            await this._drainOutboxOnce();
+            break;
+          } catch (err) {
+            attempt++;
+            if (attempt > 4) throw err;
+            await new Promise(r => setTimeout(r, BACKOFF_BASE * attempt));
           }
         }
-      } else if (item.type === 'status') {
-        await postStatusToServer(item.payload);
-        // optionally server responds with stored status — ignore for now
-        await removeOutboxItem(item.id);
-        return { ok: true };
-      } else if (item.type === 'contacts_sync') {
-        // we can POST contacts to server if you have endpoint
-        const res = await fetch(apiPath('/api/contacts/sync'), {
-          method: 'POST',
-          credentials: 'include',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(item.payload)
-        });
-        if (!res.ok) throw new Error('contacts_sync_failed:' + res.status);
-        await removeOutboxItem(item.id);
-        return { ok: true };
-      } else {
-        // unknown type - remove to avoid blocking
-        await removeOutboxItem(item.id);
-        return { ok: true, removed: true };
-      }
-    } catch (err) {
-      // update retry count and backoff schedule
-      const newCount = (item.retryCount || 0) + 1;
-      item.retryCount = newCount;
-      item.lastError = (err && err.message) || String(err);
-      item.nextAttemptAt = now() + Math.pow(2, Math.min(newCount, 8)) * RETRY_BASE_MS;
-      await idbPut(OUTBOX_STORE, item);
-      log('processOutboxItem failed, scheduled retry', { id: item.id, nextAttemptAt: item.nextAttemptAt, err: item.lastError });
-      return { ok: false, err: item.lastError };
-    }
-  }
-
-  // process outbox queue (send eligible items)
-  let _processingOutbox = false;
-  async function processOutboxQueue() {
-    if (_processingOutbox) return;
-    _processingOutbox = true;
-    try {
-      if (!isOnline()) {
-        _processingOutbox = false;
-        return;
-      }
-      const list = await getOutboxAll();
-      for (const item of list) {
-        // skip until its nextAttemptAt
-        if (item.nextAttemptAt && item.nextAttemptAt > now()) continue;
-        await processOutboxItem(item);
-      }
-    } catch (err) {
-      log('processOutboxQueue error', err);
-    } finally {
-      _processingOutbox = false;
-    }
-  }
-
-  // ---------- Periodic sync loop ----------
-  let _syncLoopHandle = null;
-  async function syncTick() {
-    // prune expired statuses in local store
-    try {
-      const allStatuses = await idbGetAll(STATUSES_STORE);
-      const nowTs = now();
-      for (const s of allStatuses) {
-        if (s.expiresAt && s.expiresAt <= nowTs) {
-          await idbDelete(STATUSES_STORE, s.id);
+        // pull server data
+        await this._pullFromServer();
+        this._syncAttempts = 0;
+        if (typeof this._onSyncEnd === 'function') this._onSyncEnd(null);
+        return true;
+      } catch (err) {
+        if ((err && err.message === 'not_logged_in') || (err.status === 401)) {
+          console.warn('OfflineDB: sync aborted — not logged in on server');
+        } else {
+          console.warn('OfflineDB: sync failed', err);
         }
+        if (typeof this._onSyncEnd === 'function') this._onSyncEnd(err);
+        throw err;
+      } finally {
+        this._isSyncing = false;
       }
-    } catch (e) { /* ignore */ }
-
-    // If online, attempt:
-    if (isOnline()) {
-      // 1) push outbox
-      await processOutboxQueue();
-      // 2) pull contacts
-      await syncContactsDown();
-      // 4) pull new messages endpoint (if available)
-      await pullNewMessages();
-    }
-  }
-
-  function startSyncLoop() {
-    if (_syncLoopHandle) clearInterval(_syncLoopHandle);
-    _syncLoopHandle = setInterval(syncTick, SYNC_INTERVAL_MS);
-    // immediate tick
-    setTimeout(syncTick, 400);
-  }
-
-  function stopSyncLoop() {
-    if (_syncLoopHandle) clearInterval(_syncLoopHandle);
-    _syncLoopHandle = null;
-  }
-
-  // ---------- Pull messages from server (expects /api/messages?since=TS&peer=token or global) ----------
-  async function pullNewMessages() {
-    try {
-      // read last seen ts from meta
-      const meta = await idbGet(META_STORE, 'lastPulledAt') || { k: 'lastPulledAt', v: 0 };
-      const since = meta.v || 0;
-      // endpoint must support since param and return { messages: [ ... ] }
-      const res = await fetch(apiPath('/api/send_messages?since=' + encodeURIComponent(since || 0)), { credentials: 'include' });
-      if (!res.ok) {
-        log('pullNewMessages non-ok', res.status);
-        return;
-      }
-      const j = await res.json();
-      if (!j || !Array.isArray(j.messages)) return;
-      for (const m of j.messages) {
-        // save each message locally
-        await saveIncomingMessage(m);
-      }
-      // update lastPulledAt
-      const newTs = now();
-      await idbPut(META_STORE, { k: 'lastPulledAt', v: newTs });
-      log('pullNewMessages saved', j.messages.length);
-    } catch (err) {
-      log('pullNewMessages failed', err);
-    }
-  }
-
-  // ---------- Public API helpers ----------
-  const OfflineSync = {
-    // init: register SW (optional), start sync loop, restore any server state
-    async init({ registerServiceWorker = true, swPath = 'static/sw.js' } = {}) {
-      // register service worker if available & desired
-      if ('serviceWorker' in navigator && registerServiceWorker) {
-        try {
-          const reg = await navigator.serviceWorker.register(swPath);
-          log('service worker registered', reg.scope);
-        } catch (e) {
-          log('service worker registration failed', e);
-        }
-      }
-
-      // listen for network changes & visibility
-      window.addEventListener('online', () => {
-        log('online event');
-        syncTick();
-      });
-      window.addEventListener('offline', () => log('offline event'));
-
-      document.addEventListener('visibilitychange', () => {
-        if (document.visibilityState === 'visible') syncTick();
-      });
-
-      // initial load of local contacts/statuses into memory
-      const localContacts = await idbGetAll(CONTACTS_STORE);
-      window.dispatchEvent(new CustomEvent('offline-contacts-loaded', { detail: localContacts }));
-
-      // start periodic sync
-      startSyncLoop();
-      // also do immediate sync
-      try { await syncTick(); } catch (e) {}
-      log('OfflineSync initialized');
-      return this;
     },
 
-    // Contacts
-    async getContacts() { return await idbGetAll(CONTACTS_STORE); },
-    async addLocalContact(contactObj) {
-      // contactObj: { contact, contact_name, phone, avatar, source, added_at }
-      const o = Object.assign({}, contactObj, { storedAt: now() });
-      await idbPut(CONTACTS_STORE, o);
-      window.dispatchEvent(new CustomEvent('offline-contacts-updated'));
-      // enqueue to outbox for server sync (optional)
-      await enqueueOutbox({ type: 'contacts_sync', payload: o });
-      return o;
+    _startPeriodicSync(){
+      if (this._syncTimer) clearInterval(this._syncTimer);
+      this._syncTimer = setInterval(()=> {
+        if (navigator.onLine) this.syncNow().catch(()=>{});
+      }, SYNC_INTERVAL_MS);
     },
 
-    // Statuses
-    async getStatuses() { return await idbGetAll(STATUSES_STORE); },
-    async postStatus(statusPayload) {
-      // statusPayload: { id?, author, text, media, createdAt?, expiresAt? }
-      statusPayload.createdAt = statusPayload.createdAt || now();
-      statusPayload.expiresAt = statusPayload.expiresAt || (statusPayload.createdAt + 24*60*60*1000);
-      statusPayload.id = statusPayload.id || 'st-' + statusPayload.createdAt + '-' + Math.random().toString(36).slice(2,6);
-      await idbPut(STATUSES_STORE, statusPayload);
-      // enqueue to outbox
-      await enqueueOutbox({ type: 'status', payload: statusPayload });
-      window.dispatchEvent(new CustomEvent('offline-statuses-updated'));
-      return statusPayload;
+    // ---------- helpers ----------
+    _looksServerMessage(m){
+      // crude check: server messages usually numeric id; local ones 'local-'
+      if (!m.id) return false;
+      return String(m.id).match(/^[0-9]+$/);
     },
 
-    // Messages
-    async getMessages(chatToken, limit) { return await getMessagesForChat(chatToken, limit || 500); },
-
-    async sendMessage(payload) {
-      // payload must contain: chatToken, text, sender, attachments[], ts
-      payload.ts = payload.ts || now();
-      // store a local 'pending' copy (local id)
-      const localMsg = Object.assign({}, {
-        id: 'local-' + payload.ts + '-' + Math.random().toString(36).slice(2,6),
-        chatToken: payload.chatToken,
-        sender: payload.sender || (window.INFINITY_PROFILE && window.INFINITY_PROFILE.name) || 'You',
-        text: payload.text || '',
-        ts: payload.ts,
-        attachments: payload.attachments || [],
-        outgoing: true,
-        delivered: false
-      });
-      await idbPut(MESSAGES_STORE, localMsg);
-      // push into outbox
-      await enqueueOutbox({ type: 'message', payload: payload });
-      window.dispatchEvent(new CustomEvent('offline-messages-updated', { detail: { chatToken: payload.chatToken }}));
-      // attempt immediate delivery
-      if (isOnline()) await processOutboxQueue();
-      return localMsg;
+    async exportBackup(filename = null){
+      // export whole DB content as JSON and trigger download
+      const contacts = await this.listContacts();
+      const statuses = await this.listStatuses();
+      const messages = await this.getMessages({ since: 0, limit: 1000000 });
+      const outbox = await withStore(STORE_OUTBOX, 'readonly', s => new Promise((resolve) => {
+        const arr = [];
+        const req = s.openCursor();
+        req.onsuccess = e => {
+          const cur = e.target.result; if (!cur) return resolve(arr);
+          arr.push(cur.value); cur.continue();
+        };
+        req.onerror = ()=> resolve(arr);
+      }));
+      const meta = {
+        last_server_msg_ts: await metaGet('last_server_msg_ts') || 0
+      };
+      const full = { exported_at: Date.now(), contacts, statuses, messages, outbox, meta };
+      const blob = new Blob([JSON.stringify(full, null, 2)], { type: 'application/json' });
+      const fname = filename || `infinity_backup_${(new Date()).toISOString().replace(/[:.]/g,'-')}.json`;
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = fname; document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(()=> URL.revokeObjectURL(url), 60000);
+      return true;
     },
 
-    // Force sync now
-    async forceSync() { return await syncTick(); },
+    async importBackupFile(file){
+      // file: File object (JSON). Merge into local DB
+      const text = await file.text();
+      const obj = JSON.parse(text);
+      if (!obj) throw new Error('invalid_backup');
+      const { contacts=[], statuses=[], messages=[], outbox=[], meta={} } = obj;
+      for (const c of contacts) await withStore(STORE_CONTACTS, 'readwrite', s => s.put(c));
+      for (const s of statuses) await withStore(STORE_STATUSES, 'readwrite', s2 => s2.put(s));
+      for (const m of messages) await withStore(STORE_MESSAGES, 'readwrite', s3 => s3.put(m));
+      for (const o of outbox) await withStore(STORE_OUTBOX, 'readwrite', s4 => s4.add(o));
+      if (meta && meta.last_server_msg_ts) await metaSet('last_server_msg_ts', meta.last_server_msg_ts);
+      return true;
+    },
 
-    // expose raw db helper if needed (for debugging)
-    _raw: { idbGetAll, idbGet, idbPut, idbDelete, idbClear, getOutboxAll }
+    // convenience send which saves local + queues + attempts push
+    async sendMessage(text, attachments = [], sender = undefined){
+      const profile = JSON.parse(localStorage.getItem('infinity_profile') || '{}');
+      const payload = {
+        id: 'local-' + Date.now() + '-' + Math.random().toString(36).slice(2,8),
+        sender: sender || profile.name || profile.username || 'You',
+        text: text,
+        attachments: attachments || [],
+        created_at: Date.now()
+      };
+      await this.saveMessageLocal(payload);
+      // UI: optionally call your appendMessage wrapper (app does this itself too)
+      if (typeof window.appendMessage === 'function') window.appendMessage(payload);
+      // try immediate sync
+      this.syncNow().catch(()=>{});
+      return payload;
+    },
+
+    onSyncStart(fn){ this._onSyncStart = fn; },
+    onSyncEnd(fn){ this._onSyncEnd = fn; }
   };
 
-  // expose globally
-  window.OfflineSync = OfflineSync;
+  // Expose globally
+  window.OfflineDB = OfflineDB;
 
-  // Auto-init (you can remove this and init manually with OfflineSync.init())
-  setTimeout(() => OfflineSync.init().catch(e=>log('init failed', e)), 300);
-
-  // small compatibility shim: ensure app can read local contacts via localStorage fallback
-  // Mirror DB contacts into localStorage periodically so old code calling localStorage works
-  async function mirrorContactsToLocalStorage() {
-    try {
-      const c = await idbGetAll(CONTACTS_STORE);
-      localStorage.setItem('infinity_contacts', JSON.stringify(c));
-      window.dispatchEvent(new CustomEvent('offline-contacts-mirrored', { detail: c }));
-    } catch (e) { /* ignore */ }
-  }
-  setInterval(mirrorContactsToLocalStorage, 5000);
-  setTimeout(mirrorContactsToLocalStorage, 1500);
-
-  // small compatibility: expose loadStatuses/loadContacts hooks used in your code
-  window.loadStatuses = window.loadStatuses || (async () => (await OfflineSync.getStatuses()) || []);
-  window.loadContacts = window.loadContacts || (async () => (await OfflineSync.getContacts()) || []);
+  // Auto-init
+  (async function boot(){ 
+    try { await OfflineDB.init(); } catch(e){ console.warn('OfflineDB init failed', e); }
+  })();
 
 })();
 </script>
