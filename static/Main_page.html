@@ -581,24 +581,86 @@
     setTimeout(()=> document.addEventListener('click', onDoc), 10);
   }
 
-  // --- load contacts from server and render ---
-  async function loadContacts(){
+  // --- load contacts from server and render (FINAL WORKING VERSION) ---
+  async function loadContacts() {
     const container = document.getElementById('contactsContainer');
     if (!container) return;
+  
     try {
+      // 1️⃣ Load local profile
       const profileLocal = JSON.parse(localStorage.getItem('infinity_profile') || '{}');
       const username = (profileLocal.name || profileLocal.username || '').trim();
-      const url = username ? `/contacts_list?username=${encodeURIComponent(username)}` : '/contacts_list';
+  
+      // 2️⃣ Build correct URL
+      const url = username 
+        ? `/contacts_list?username=${encodeURIComponent(username)}`
+        : `/contacts_list`;
+  
+      // 3️⃣ Fetch server contacts
       const resp = await fetch(url, { credentials: 'same-origin' });
-      if (!resp.ok) throw new Error('failed: ' + resp.status);
+      if (!resp.ok) {
+        console.warn("❌ Server returned:", resp.status);
+        throw new Error("Failed " + resp.status);
+      }
+  
       const data = await resp.json();
-      renderContacts(data.contacts || []);
+      let serverContacts = data.contacts || [];
+  
+      console.log("📌 Server contacts:", serverContacts);
+  
+      // 4️⃣ Local contacts
+      let localContacts = [];
+      try {
+        localContacts = JSON.parse(localStorage.getItem("infinity_contacts") || "[]");
+      } catch {
+        localContacts = [];
+      }
+  
+      console.log("📌 Local contacts:", localContacts);
+  
+      // 5️⃣ Merge local + server (server wins)
+      const merged = [...localContacts];
+  
+      serverContacts.forEach(sc => {
+        const idx = merged.findIndex(c => c.contact === sc.contact);
+        if (idx >= 0) merged[idx] = sc;
+        else merged.push(sc);
+      });
+  
+      // 6️⃣ Always add self-chat
+      if (username) {
+        const selfEntry = {
+          name: `${username} (You)`,
+          contact: "self",
+          last_text: "Message Yourself",
+          last_ts: Math.floor(Date.now() / 1000),
+          avatar_url: profileLocal.avatar || null
+        };
+  
+        const hasSelf = merged.some(c => c.contact === "self");
+        if (!hasSelf) merged.unshift(selfEntry);
+      }
+  
+      console.log("📌 Final merged contacts:", merged);
+  
+      // 7️⃣ Save to localStorage for offline fallback
+      localStorage.setItem("infinity_contacts", JSON.stringify(merged));
+  
+      // 8️⃣ Make available globally for debug + fallback renderer
+      window.FINAL_CONTACTS = merged;
+      console.log("📌 FINAL_CONTACTS set:", window.FINAL_CONTACTS);
+  
+      // 9️⃣ Render UI
+      renderContacts(merged);
+  
     } catch (err) {
-      if (container) container.innerHTML = '<div style="padding:18px;color:#c00">Unable to load contacts</div>';
-      console.error('loadContacts', err);
+      console.error("loadContacts error:", err);
+      if (container) {
+        container.innerHTML =
+          '<div style="padding:18px;color:#c00">Unable to load contacts</div>';
+      }
     }
   }
-
   /* === contact edit / add UI helpers & updated render/toggle menu === */
   function getLocalContactName(contactId) {
     try {
