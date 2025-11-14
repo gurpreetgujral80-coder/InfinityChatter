@@ -1659,11 +1659,29 @@
 
   // Expose globally
   window.OfflineDB = OfflineDB;
-
-  // Auto-init
-  (async function boot(){ 
-    try { await OfflineDB.init(); } catch(e){ console.warn('OfflineDB init failed', e); }
-  })();
+  
+  async function startOfflineDB() {
+  
+      // Try to set session if profile exists
+      const profile = JSON.parse(localStorage.getItem("infinity_profile") || "{}");
+      const username = profile.username || profile.name;
+  
+      if (!username) {
+          console.warn("⚠️ No local profile — not starting OfflineDB");
+          return;
+      }
+  
+      // Set session first
+      await fetch('/api/set_session', {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username })
+      }).catch(() => {});
+  
+      console.log("✅ Session ensured, starting OfflineDB…");
+      await OfflineDB.init();
+  }
 
 })();
 </script>
