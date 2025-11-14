@@ -1841,6 +1841,33 @@
   });
 })();
 
+// 🔥 Force-final-render after loadContacts completes
+async function forceFinalRenderFix() {
+  console.log("📌 Final render fix started");
+
+  // Wait for loadContacts() to run
+  try {
+    await loadContacts();   // <-- ensure contacts are loaded first
+  } catch (e) {
+    console.warn("📌 loadContacts failed inside final fix", e);
+  }
+
+  // Now FINAL_CONTACTS should exist
+  const container = document.getElementById("contactsContainer");
+  console.log("📌 Final render: container =", container);
+  console.log("📌 FINAL_CONTACTS =", window.FINAL_CONTACTS);
+
+  if (container && Array.isArray(window.FINAL_CONTACTS)) {
+    console.log("📌 Rendering FINAL_CONTACTS now:", window.FINAL_CONTACTS);
+    renderContacts(window.FINAL_CONTACTS);
+  }
+}
+
+// Run after everything else
+window.addEventListener("load", () => {
+  setTimeout(forceFinalRenderFix, 300); // small delay ensures full boot
+});
+
 </script>
 </body>
 </html>
