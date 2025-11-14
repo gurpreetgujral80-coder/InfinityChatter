@@ -288,6 +288,246 @@
   const loadStatuses = () => loadJSON(STATUSES_KEY, []);
   const saveStatuses = s => { saveJSON(STATUSES_KEY, s); };
 
+  (function(){
+    const CONTACTS_KEY = 'infinity_contacts';
+    const STATUSES_KEY = 'infinity_statuses';
+  
+    // safe loader for statuses (in case your page already defines this)
+    const loadStatuses = window.loadStatuses || (() => {
+      try { return JSON.parse(localStorage.getItem(STATUSES_KEY) || '[]') || []; } catch { return []; }
+    });
+  
+    // ensure session from local profile (tries /api/set_session)
+    async function ensureSessionFromProfile() {
+      try {
+        const profile = (typeof loadProfile === 'function') ? loadProfile() : (JSON.parse(localStorage.getItem('infinity_profile')||'{}'));
+        const username = (profile && (profile.name || profile.username)) ? (profile.name || profile.username) : null;
+        if (!username) return false;
+        const res = await fetch('/api/set_session', {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username })
+        });
+        return res.ok;
+      } catch (e) {
+        console.warn('ensureSessionFromProfile error', e);
+        return false;
+      }
+    }
+  
+    // network-first fetch with single retry on 401, then fallbacks
+    async function fetchContacts() {
+      const localFallback = () => {
+        try {
+          if (Array.isArray(window.INFINITY_CONTACTS) && window.INFINITY_CONTACTS.length) return window.INFINITY_CONTACTS;
+          const stored = JSON.parse(localStorage.getItem(CONTACTS_KEY) || '[]');
+          return Array.isArray(stored) ? stored : [];
+        } catch (e) {
+          return [];
+        }
+      };
+  
+      // try server once
+      try {
+        const res = await fetch('/api/contacts', { credentials: 'include', headers: { 'Accept': 'application/json' }});
+        if (res.ok) {
+          const j = await res.json().catch(()=>null);
+          if (!j) return localFallback();
+          if (Array.isArray(j)) return j;
+          if (Array.isArray(j.contacts)) return j.contacts;
+          // unknown shape - try common property
+          return Array.isArray(j.data) ? j.data : localFallback();
+        }
+  
+        // 401 -> attempt to set session and retry once
+        if (res.status === 401) {
+          const ok = await ensureSessionFromProfile();
+          if (!ok) return localFallback();
+          // retry
+          try {
+            const res2 = await fetch('/api/contacts', { credentials: 'include', headers: { 'Accept': 'application/json' }});
+            if (res2.ok) {
+              const j2 = await res2.json().catch(()=>null);
+              if (!j2) return localFallback();
+              if (Array.isArray(j2)) return j2;
+              if (Array.isArray(j2.contacts)) return j2.contacts;
+              return Array.isArray(j2.data) ? j2.data : localFallback();
+            } else {
+              return localFallback();
+            }
+          } catch (e2) {
+            return localFallback();
+          }
+        }
+  
+        // other non-ok -> fallback
+        return localFallback();
+      } catch (err) {
+        // network error -> fallback
+        return localFallback();
+      }
+    }
+  
+    // Build a matcher set for quick membership checks.
+    // Accepts array of contact objects and indexes names, contact ids, phones, peer_token, contact_name.
+    function buildContactMatcher(contacts) {
+      const s = new Set();
+      if (!Array.isArray(contacts)) return s;
+      for (const c of contacts) {
+        try {
+          // possible fields
+          const fields = [
+            c.contact,           // common unique id
+            c.contact_name,      // server-side human name
+            c.name,              // alternate name field
+            c.phone,             // phone
+            c.peer_token,        // peer token (if stored)
+            c.contactId,         // other possible key
+            (c.owner || ''),     // owner (if contact row lists owner/contact_name)
+          ];
+          for (let f of fields) {
+            if (!f && typeof f !== 'string') continue;
+            f = String(f).trim().toLowerCase();
+            if (!f) continue;
+            s.add(f);
+          }
+        } catch (e) { /* ignore malformed contact */ }
+      }
+      return s;
+    }
+  
+    // Decide whether a status is authored by a contact:
+    // - check status.author (string) normalized
+    // - check status.meta.peer or status.meta.contactId, if present
+    function isStatusFromContact(status, contactSet) {
+      if (!status || !contactSet) return false;
+      // author field
+      if (status.author) {
+        const a = String(status.author).trim().toLowerCase();
+        if (contactSet.has(a)) return true;
+        // some authors may be "Name (You)" or include extra chars - also try just first token
+        const tok = a.split(/\s+/)[0];
+        if (contactSet.has(tok)) return true;
+      }
+      // meta fields
+      const metaKeys = ['peer', 'peer_token', 'contact', 'contactId', 'contact_id', 'from'];
+      for (const k of metaKeys) {
+        if (status.meta && status.meta[k]) {
+          const v = String(status.meta[k]).trim().toLowerCase();
+          if (contactSet.has(v)) return true;
+        }
+        if (status[k]) {
+          const v2 = String(status[k]).trim().toLowerCase();
+          if (contactSet.has(v2)) return true;
+        }
+      }
+      // attempt to match avatar filename -> some contacts use 'm1.webp' etc (optional)
+      if (status.avatar && typeof status.author === 'string') {
+        const a = String(status.author).trim().toLowerCase();
+        if (contactSet.has(a)) return true;
+      }
+      return false;
+    }
+  
+    // Renders statuses but only those matching contacts.
+    // Mirrors previous layout and spacing you used.
+    async function renderStatuses() {
+      // ensure ROOT exists (your script sets ROOT earlier). Otherwise fallback to #pageContent or body.
+      const ROOT = document.getElementById('ic-updates-root') || document.getElementById('pageContent') || document.body;
+      const oldFeed = document.getElementById('ic-statuses-feed');
+      if (oldFeed) oldFeed.remove();
+  
+      const feed = document.createElement('div');
+      feed.id = 'ic-statuses-feed';
+      feed.style.maxWidth = '980px';
+      feed.style.margin = '6px auto 60px';
+      feed.style.display = 'flex';
+      feed.style.flexDirection = 'column';
+      feed.style.gap = '12px';
+      feed.style.padding = '0 6px';
+  
+      // load statuses & contacts
+      const statuses = Array.isArray(loadStatuses()) ? loadStatuses() : [];
+      const contacts = await fetchContacts();
+      const contactSet = buildContactMatcher(contacts);
+  
+      // Filter: only statuses authored by contacts
+      const visible = statuses.filter(s => isStatusFromContact(s, contactSet));
+  
+      if (!visible.length) {
+        const noContacts = (Array.isArray(contacts) && contacts.length === 0);
+        const empty = document.createElement('div');
+        empty.style.cssText = 'text-align:center;color:#64748b;padding:28px;background:transparent';
+        empty.textContent = noContacts ? 'No contacts found — add contacts to see their status' : 'No Status yet.';
+        feed.appendChild(empty);
+        ROOT.appendChild(feed);
+        return;
+      }
+  
+      // render each visible status
+      for (const s of visible) {
+        const card = document.createElement('div');
+        card.style.cssText = 'display:flex;align-items:flex-start;gap:12px;padding:12px;border-radius:12px;background:#fff;box-shadow:0 8px 22px rgba(2,6,23,0.04);cursor:pointer;margin:0 6px;';
+  
+        const left = document.createElement('div');
+        left.style.cssText = 'flex:0 0 56px';
+        left.innerHTML = s.avatar
+          ? `<img src="${s.avatar}" style="width:56px;height:56px;border-radius:10px;object-fit:cover">`
+          : `<div style="width:56px;height:56px;border-radius:10px;background:#e2e8f0;display:flex;align-items:center;justify-content:center;font-weight:700;color:#0f172a">${(String(s.author||'U')[0]||'?')}</div>`;
+  
+        const mid = document.createElement('div');
+        mid.style.cssText = 'flex:1;min-width:0';
+        const messagePreview = s.text ? String(s.text) : '';
+        mid.innerHTML = `<div style="font-weight:700;color:#0f172a">${escapeHtml(s.author || 'You')}</div><div style="color:#475569;font-size:0.95rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:680px;margin-top:6px">${escapeHtml(messagePreview)}</div>`;
+  
+        const right = document.createElement('div');
+        right.style.cssText = 'flex:0 0 auto;font-size:0.85rem;color:#64748b;margin-left:8px';
+        const ts = s.createdAt || s.created_at || s.ts || Date.now();
+        try {
+          right.textContent = new Date(Number(ts)).toLocaleString([], {
+            year: 'numeric', month: 'short', day: 'numeric',
+            hour: '2-digit', minute: '2-digit'
+          });
+        } catch (e) {
+          right.textContent = String(ts);
+        }
+  
+        card.appendChild(left);
+        card.appendChild(mid);
+        card.appendChild(right);
+  
+        // click opens modal to view full status (keeps same hook)
+        card.addEventListener('click', (ev) => {
+          ev.stopPropagation();
+          if (typeof showStatusModal === 'function') {
+            showStatusModal(s);
+          } else {
+            console.log('status clicked', s);
+          }
+        });
+  
+        feed.appendChild(card);
+      }
+  
+      ROOT.appendChild(feed);
+    }
+  
+    // small HTML-escape helper (safe)
+    function escapeHtml(str) {
+      if (str == null) return '';
+      return String(str).replace(/[&<>"'`=\/]/g, function (s) {
+        return ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;','/':'&#x2F;','`':'&#x60;','=':'&#x3D;' })[s];
+      });
+    }
+  
+    // expose to global so other scripts can call them
+    window.fetchContacts = fetchContacts;
+    window.buildContactMatcher = buildContactMatcher;
+    window.isStatusFromContact = isStatusFromContact;
+    window.renderStatuses = renderStatuses;
+  
+  })();
   // --- ensure Pacifico font for headers ---
   (function ensureFont() {
     if (!document.querySelector('link[href*="Pacifico"]')) {
@@ -297,7 +537,7 @@
       document.head.appendChild(l);
     }
   })();
-
+  
   // --- UI mount points ---
   const pageContent = document.getElementById('pageContent') || document.body;
   if (!document.getElementById('ic-updates-root')) {
@@ -362,44 +602,6 @@
     if (diff < 3600) return `${Math.floor(diff/60)}m`;
     if (diff < 24*3600) return `${Math.floor(diff/3600)}h`;
     return d.toLocaleString();
-  }
-
-  // --- fetch contacts (network-first with fallbacks) ---
-  async function fetchContacts() {
-    // 1️⃣ Try server API first
-    try {
-      const res = await fetch('/api/contacts', {
-        method: 'GET',
-        credentials: 'include', // ✅ ensures session cookies are sent
-        headers: { 'Accept': 'application/json' }
-      });
-  
-      if (res.ok) {
-        const data = await res.json().catch(() => ({}));
-        if (Array.isArray(data)) return data;               // e.g. server returns [...]
-        if (Array.isArray(data.contacts)) return data.contacts; // e.g. server returns { contacts: [...] }
-        return []; // unexpected shape
-      } else if (res.status === 401) {
-        console.warn('Unauthorized — user not logged in.');
-        return [];
-      } else {
-        console.warn('Failed to fetch contacts:', res.status);
-      }
-    } catch (err) {
-      console.warn('Network error fetching contacts:', err);
-    }
-  
-    // 2️⃣ Fallback to global variable
-    if (Array.isArray(window.INFINITY_CONTACTS)) {
-      return window.INFINITY_CONTACTS;
-    }
-  
-    // 3️⃣ Fallback to localStorage
-    const stored = loadJSON(CONTACTS_KEY, []);
-    if (Array.isArray(stored)) return stored;
-  
-    // 4️⃣ Final fallback — return empty
-    return [];
   }
 
   // --- build contact name/id set for fast lookup (lowercased) ---
@@ -620,76 +822,6 @@
     const area = document.getElementById('ic-add-status-area');
     if (area && area.parentNode) area.parentNode.insertBefore(hdr, area.nextSibling);
     else ROOT.insertBefore(hdr, ROOT.firstChild);
-  }
-
-  // --- render statuses feed as boxes (only contacts) ---
-  async function renderStatuses() {
-    const oldFeed = document.getElementById('ic-statuses-feed');
-    if (oldFeed) oldFeed.remove();
-
-    const feed = document.createElement('div');
-    feed.id = 'ic-statuses-feed';
-    feed.style.maxWidth = '980px';
-    feed.style.margin = '6px auto 60px';
-    feed.style.display = 'flex';
-    feed.style.flexDirection = 'column';
-    feed.style.gap = '12px';
-    feed.style.padding = '0 6px';
-
-    // load statuses & contacts
-    const statuses = loadStatuses();
-    const contacts = await fetchContacts();
-    const contactSet = buildContactMatcher(contacts);
-
-    // Filter: only statuses authored by contacts
-    const visible = statuses.filter(s => isStatusFromContact(s, contactSet));
-
-    if (!visible.length) {
-      // helpful message depending on whether we have any contacts
-      const noContacts = (contacts.length === 0);
-      const empty = document.createElement('div');
-      empty.style.cssText = 'text-align:center;color:#64748b;padding:28px;background:transparent';
-      empty.textContent = noContacts ? 'No contacts found — add contacts to see their status' : 'No Status yet.';
-      feed.appendChild(empty);
-      ROOT.appendChild(feed);
-      return;
-    }
-
-    for (const s of visible) {
-      const card = document.createElement('div');
-      card.style.cssText = 'display:flex;align-items:flex-start;gap:12px;padding:12px;border-radius:12px;background:#fff;box-shadow:0 8px 22px rgba(2,6,23,0.04);cursor:pointer;margin:0 6px;';
-      const left = document.createElement('div');
-      left.style.cssText = 'flex:0 0 56px';
-      left.innerHTML = s.avatar ? `<img src="${s.avatar}" style="width:56px;height:56px;border-radius:10px;object-fit:cover">` : `<div style="width:56px;height:56px;border-radius:10px;background:#e2e8f0;display:flex;align-items:center;justify-content:center;font-weight:700;color:#0f172a">${(s.author||'U')[0]||'?'}</div>`;
-
-      const mid = document.createElement('div');
-      mid.style.cssText = 'flex:1;min-width:0';
-      mid.innerHTML = `<div style="font-weight:700;color:#0f172a">${s.author || 'You'}</div><div style="color:#475569;font-size:0.95rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:680px;margin-top:6px">${s.text || ''}</div>`;
-
-      const right = document.createElement('div');
-      right.style.cssText = 'flex:0 0 auto;font-size:0.85rem;color:#64748b;margin-left:8px';
-      right.textContent = new Date(s.createdAt).toLocaleString([], {
-         year: 'numeric',
-         month: 'short',
-         day: 'numeric',
-         hour: '2-digit',
-         minute: '2-digit'
-      });
-
-      card.appendChild(left);
-      card.appendChild(mid);
-      card.appendChild(right);
-
-      // click opens modal to view full status
-      card.addEventListener('click', (ev) => {
-        ev.stopPropagation();
-        showStatusModal(s);
-      });
-
-      feed.appendChild(card);
-    }
-
-    ROOT.appendChild(feed);
   }
 
   // --- status view modal (unchanged) ---
