@@ -1734,6 +1734,51 @@
   }
 
 })();
+
+// ===============================
+// 🔥 FINAL CONTACT RENDER FIX
+// ===============================
+(function finalRenderFix() {
+  console.log("📌 Final render fix loaded");
+
+  function tryRender() {
+    const container = document.getElementById("contactsContainer");
+
+    console.log("📌 Checking container:", container);
+    console.log("📌 FINAL_CONTACTS:", window.FINAL_CONTACTS);
+
+    if (!container) {
+      console.warn("⏳ contactsContainer not ready, retrying...");
+      return false;
+    }
+
+    if (typeof renderContacts !== "function") {
+      console.warn("⏳ renderContacts not ready, retrying...");
+      return false;
+    }
+
+    const list = window.FINAL_CONTACTS || [];
+    console.log("📌 Rendering contacts now:", list);
+    renderContacts(list);
+    return true;
+  }
+
+  // Try multiple times (DOM / async safe)
+  let attempts = 0;
+  const interval = setInterval(() => {
+    attempts++;
+    if (tryRender() || attempts > 20) {
+      clearInterval(interval);
+    }
+  }, 200);
+
+  // Final fallback after full page load
+  window.addEventListener("load", () => {
+    console.log("📌 Window loaded — forcing final render");
+    tryRender();
+  });
+})();
+
 </script>
 </body>
 </html>
