@@ -1,15 +1,3 @@
-(async () => {
-  const profile = JSON.parse(localStorage.getItem('infinity_profile') || '{}');
-  if (profile && profile.username) {
-    await fetch('/api/set_session', {
-      method: 'POST',
-      credentials: 'include',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username: profile.username })
-    });
-  }
-})();
-
 // sw.js (place at project static root and serve it at "/sw.js")
 self.addEventListener('push', event => {
   let payload = {};
