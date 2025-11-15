@@ -1420,15 +1420,39 @@
       };
       menu.appendChild(btnAdd);
     }
-  
-    // --- 4. Block ---
-    const btnBlock = makeBtn('Block');
-    btnBlock.onclick = e => {
-      e.stopPropagation();
-      if (confirm(`Block ${item.name || item.contact}?`)) card.style.opacity = '0.5';
-      closeAllContactMenus();
-    };
-    menu.appendChild(btnBlock);
+    
+    // --- 4. Block Options ---
+    if (!isSelf) {
+      const btnBlockDel = makeBtn('Block and Delete Contact');
+      btnBlockDel.style.color = '#b91c1c';
+      btnBlockDel.onclick = e => {
+        e.stopPropagation();
+        showConfirmModal(
+          `Block and delete ${item.name || item.contact}?`,
+          async () => {
+            await blockContact(contactId);        // implement your block logic
+            await deleteContactFully(contactId);  // remove from DB + UI
+            card.remove();
+          }
+        );
+        closeAllContactMenus();
+      };
+      menu.appendChild(btnBlockDel);
+    
+      const btnBlockOnly = makeBtn('Block');
+      btnBlockOnly.onclick = e => {
+        e.stopPropagation();
+        showConfirmModal(
+          `Block ${item.name || item.contact}?`,
+          async () => {
+            await blockContact(contactId);
+            card.remove(); // just hide from main page (no delete)
+          }
+        );
+        closeAllContactMenus();
+      };
+      menu.appendChild(btnBlockOnly);
+    }
   
     // --- 5. Delete ---
     const btnDel = makeBtn('Delete Chat', 'danger');
