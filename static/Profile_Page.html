@@ -330,7 +330,7 @@
   
       // try server once
       try {
-        const res = await fetch('/api/contacts', { credentials: 'include', headers: { 'Accept': 'application/json' }});
+        const res = await fetch('/api/contacts_add', { credentials: 'include', headers: { 'Accept': 'application/json' }});
         if (res.ok) {
           const j = await res.json().catch(()=>null);
           if (!j) return localFallback();
@@ -346,7 +346,7 @@
           if (!ok) return localFallback();
           // retry
           try {
-            const res2 = await fetch('/api/contacts', { credentials: 'include', headers: { 'Accept': 'application/json' }});
+            const res2 = await fetch('/api/contacts_add', { credentials: 'include', headers: { 'Accept': 'application/json' }});
             if (res2.ok) {
               const j2 = await res2.json().catch(()=>null);
               if (!j2) return localFallback();
