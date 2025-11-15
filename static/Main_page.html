@@ -745,34 +745,136 @@
     document.getElementById('createInviteLinkBtn')?.addEventListener('click', createInstantShareLink);
   }
 
-  // Contacts Picker (modern browsers, HTTPS, Chrome Android)
-  async function pickContactsFromDevice(){
+  async function handleContactCheck(list, resultDiv) {
+    const found = [];
+    const notFound = [];
+  
+    for (const c of list) {
+      try {
+        const res = await fetch('/api/check_phone', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ phone: c.phone })
+        });
+  
+        const j = await res.json();
+  
+        if (j && j.registered) {
+          // already a user → auto-add contact
+          await addContactToLocalDB({
+            contact: j.username,      // unique identifier
+            name: j.display_name || c.name || j.username,
+            phone: c.phone
+          });
+          found.push(c);
+        } else {
+          notFound.push(c);
+        }
+  
+      } catch (err) {
+        console.error('Check failed', err);
+        notFound.push(c);
+      }
+    }
+  
+    // UI results
+    let html = "";
+  
+    if (found.length) {
+      html += `<div style="margin-bottom:10px;color:green;"><b>Added contacts:</b></div>`;
+      found.forEach(f => {
+        html += `<div style="margin-bottom:6px">✔ ${f.name} (${f.phone})</div>`;
+      });
+    }
+  
+    if (notFound.length) {
+      html += `<div style="margin-top:14px;color:#b91c1c;"><b>These people are not on InfinityChatter:</b></div>`;
+      notFound.forEach(f => {
+        html += `<div style="margin-bottom:6px">✖ ${f.name} (${f.phone})</div>`;
+      });
+      html += `<div style="margin-top:8px">Ask them to join using the Invite Link.</div>`;
+    }
+  
+    resultDiv.innerHTML = html;
+  }
+  
+  async function addContactToLocalDB(c) {
+    return new Promise((resolve, reject) => {
+      const req = indexedDB.open("infinity_offline_v3", 2);
+  
+      req.onerror = () => reject(req.error);
+  
+      req.onsuccess = () => {
+        const db = req.result;
+        const tx = db.transaction("contacts", "readwrite");
+        const store = tx.objectStore("contacts");
+  
+        const row = {
+          contact: c.contact,
+          name: c.name || c.contact,
+          phone: c.phone,
+          last_text: "",
+          last_ts: Date.now() / 1000,
+          avatar_url: ""
+        };
+  
+        const putReq = store.put(row);
+        putReq.onsuccess = () => resolve(true);
+        putReq.onerror = () => reject(putReq.error);
+      };
+    });
+  }
+
+  async function pickContactsFromDevice() {
     const resultDiv = document.getElementById('addContactsResult');
     if (!resultDiv) return;
+  
     resultDiv.innerHTML = '<div>Requesting contact permission...</div>';
+  
     try {
-      if ('contacts' in navigator && typeof navigator.contacts.select === 'function') {
-        const props = ['name','tel'];
-        const opts = {multiple:true};
-        const contacts = await navigator.contacts.select(props, opts);
-        // contacts -> array of objects with {name:[], tel:[]}
-        const normalized = [];
-        for (const c of contacts) {
-          const name = Array.isArray(c.name) ? c.name[0] : (c.name || '');
-          const tels = Array.isArray(c.tel) ? c.tel : (c.tel ? [c.tel] : []);
-          for (const t of tels) normalized.push({name: name || '', phone: normalizePhone(t)});
-        }
-        if (!normalized.length) { resultDiv.innerHTML = '<div>No phone numbers selected.</div>'; return; }
-        showSelectedAndSend(normalized);
-      } else {
-        resultDiv.innerHTML = '<div>Your browser does not support the Contacts Picker API. Use the invite link option.</div>';
+      if (!('contacts' in navigator) || typeof navigator.contacts.select !== 'function') {
+        resultDiv.innerHTML = '<div>Your browser does not support the Contacts Picker API.</div>';
+        return;
       }
+  
+      const props = ['name', 'tel'];
+      const opts = { multiple: true };
+  
+      // 📌 Permission request happens here
+      const contacts = await navigator.contacts.select(props, opts);
+  
+      if (!contacts || !contacts.length) {
+        resultDiv.innerHTML = '<div>No contact selected.</div>';
+        return;
+      }
+  
+      // Normalize phone/name list
+      const normalized = [];
+      for (const c of contacts) {
+        const name = Array.isArray(c.name) ? c.name[0] : c.name || "";
+        const tels = Array.isArray(c.tel) ? c.tel : (c.tel ? [c.tel] : []);
+        for (const t of tels) {
+          const phone = normalizePhone(t);
+          if (phone) normalized.push({ name, phone });
+        }
+      }
+  
+      if (!normalized.length) {
+        resultDiv.innerHTML = '<div>No valid phone numbers found.</div>';
+        return;
+      }
+  
+      resultDiv.innerHTML = '<div>Checking users...</div>';
+  
+      // 🔥 NOW check every phone with your backend
+      handleContactCheck(normalized, resultDiv);
+  
     } catch (err) {
       console.error(err);
       resultDiv.innerHTML = '<div>Permission denied or error accessing contacts.</div>';
     }
   }
-
+  
   function normalizePhone(s){
     if(!s) return '';
     // very simple normalization: keep digits and leading +
