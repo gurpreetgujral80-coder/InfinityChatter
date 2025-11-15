@@ -328,7 +328,7 @@
     async replaceContactsFull(serverContacts = []) {
       const self = this._ensureSelfEntryObject();
     
-      // Step 1: Fetch all local contacts except self
+      // 1️⃣ Fetch all local contacts except self
       const localContacts = await withStore(STORE_CONTACTS, 'readonly', store => new Promise(res => {
         const arr = [];
         const req = store.openCursor();
@@ -342,49 +342,77 @@
         req.onerror = () => res(arr);
       }));
     
-      // Step 2: Normalize server contacts
-      const normalizedServer = serverContacts.map(sc => ({
+      // 2️⃣ Normalize server contacts
+      const normalizedServer = (serverContacts || []).map(sc => ({
         contact: sc.contact || sc.contact_name || ('c-' + Date.now() + '-' + Math.random().toString(36).slice(2,6)),
         name: sc.contact_name || sc.name || '',
         phone: sc.phone || '',
         avatar_url: sc.avatar || sc.avatar_url || '',
         added_at: sc.added_at || Date.now()
-      })).filter(c => String(c.contact).toLowerCase() !== 'self'); // remove accidental 'self'
+      })).filter(c => String(c.contact).toLowerCase() !== 'self'); // prevent accidental 'self'
     
-      // Step 3: Merge local unsynced contacts with server contacts
+      // 3️⃣ Merge local contacts that are not already in server list
       const merged = [...normalizedServer];
       for (const lc of localContacts) {
-        if (!merged.find(c => c.contact === lc.contact)) {
-          merged.push(lc);
+        if (!merged.some(c => c.contact === lc.contact)) merged.push(lc);
+      }
+    
+      // 4️⃣ Clear store and insert merged contacts + self safely
+      await withStore(STORE_CONTACTS, 'readwrite', store => new Promise(resolve => {
+        const clearReq = store.clear();
+        clearReq.onsuccess = () => {
+          try {
+            merged.forEach(c => store.put(c));
+            store.put(self);
+          } catch (err) {
+            console.error('Error inserting contacts:', err);
+          }
+          resolve(true);
+        };
+        clearReq.onerror = () => resolve(true);
+      }));
+    
+      CONTACTS_CACHE = null;
+    },
+    
+    async saveMessageLocal(msg) {
+      const entry = Object.assign({}, msg);
+    
+      // Ensure message ID
+      if (!entry.id) entry.id = 'local-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8);
+    
+      // Ensure contact
+      entry.contact = entry.contact || entry.to || entry.peer || 'unknown';
+    
+      // Ensure timestamp
+      entry.created_at = entry.created_at || Date.now();
+    
+      // Save to IndexedDB safely
+      await withStore(STORE_MESSAGES, 'readwrite', store => new Promise((resolve, reject) => {
+        try {
+          const req = store.put(entry);
+          req.onsuccess = () => resolve(true);
+          req.onerror = () => reject(req.error);
+        } catch (err) {
+          reject(err);
+        }
+      }));
+    
+      // Update in-memory last timestamp
+      const lastTs = MESSAGES_INDEX_CACHE[entry.contact] || 0;
+      if ((entry.created_at || 0) > lastTs) MESSAGES_INDEX_CACHE[entry.contact] = entry.created_at;
+    
+      // Queue for server sync if not a server-originated message
+      if (!this._looksServerMessage(entry)) {
+        try {
+          await this.enqueueOutbox({ type: 'message', payload: entry });
+        } catch (err) {
+          console.warn('Failed to enqueue message:', err);
         }
       }
     
-      // Step 4: Clear store and re-insert merged contacts + self
-      await withStore(STORE_CONTACTS, 'readwrite', store => new Promise(resolve => {
-        const req = store.clear();
-        req.onsuccess = () => {
-          for (const c of merged) store.put(c);
-          store.put(self);
-          resolve(true);
-        };
-        req.onerror = () => resolve(true);
-      }));
-    
-      // Reset cache
-      CONTACTS_CACHE = null;
-    }
-
-    async saveMessageLocal(msg) {
-      const entry = Object.assign({}, msg);
-      if (!entry.id) entry.id = 'local-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8);
-      if (!entry.contact) entry.contact = entry.to || entry.peer || 'unknown';
-      if (!entry.created_at) entry.created_at = Date.now();
-      await withStore(STORE_MESSAGES, 'readwrite', s => s.put(entry));
-      const last = MESSAGES_INDEX_CACHE[entry.contact] || 0;
-      if ((entry.created_at || 0) > last) MESSAGES_INDEX_CACHE[entry.contact] = entry.created_at;
-      if (!this._looksServerMessage(entry)) await this.enqueueOutbox({ type: 'message', payload: entry });
       return entry;
-    },
+    }
 
     async getMessagesForContact(contactId, { since = 0, limit = 1000 } = {}) {
       return withStore(STORE_MESSAGES, 'readonly', store => new Promise((res) => {
