@@ -1144,10 +1144,7 @@
         if (idx >= 0) merged[idx] = sc;
         else merged.push(sc);
       });
-  
-      // ❗ 6️⃣ NO SELF CHAT INSERT HERE — removed permanently
-  
-      console.log("📌 Final merged contacts:", merged);
+
   
       // 7️⃣ Update IndexedDB (server overrides local)
       for (const c of merged) {
@@ -1249,27 +1246,36 @@
     const container = document.getElementById('contactsContainer');
     if (!container) return;
   
+    // ------------------------------------------
+    // 1) CLEAN DUPLICATES — final guaranteed fix
+    // ------------------------------------------
+    list = Array.isArray(list) ? [...list] : [];
+  
+    list = list.filter((item, index, arr) => {
+      const cid = String(item.contact || "").toLowerCase();
+  
+      // Allow only ONE self
+      if (cid === "self") {
+        return arr.findIndex(x => String(x.contact || "").toLowerCase() === "self") === index;
+      }
+  
+      // Normal contacts dedupe
+      return arr.findIndex(x =>
+        String(x.contact || "").toLowerCase() === cid
+      ) === index;
+    });
+    // ------------------------------------------
+  
     const addBox = document.getElementById('addContactsBox');
     const profile = JSON.parse(localStorage.getItem('infinity_profile') || '{}');
     const userLabel = profile.name || profile.username || 'You';
-  
-    // Self chat always exists
-    const selfContact = {
-      name: `${userLabel} (You)`,
-      contact: 'self',
-      last_text: 'Message Yourself',
-      last_ts: Math.floor(Date.now() / 1000),
-      avatar_url: profile.avatar_url || ''
-    };
-  
-    list = Array.isArray(list) ? [...list] : [];
-    if (!list.some(c => (c.contact || '').toLowerCase() === 'self')) list.push(selfContact);
+
     list.sort((a, b) => (b.last_ts || 0) - (a.last_ts || 0));
   
-    // Count only real contacts (exclude "self")
+    // Count real contacts
     const realContacts = list.filter(c => (c.contact || '').toLowerCase() !== 'self');
   
-    // Keep "Add Contacts" box visible until at least one real contact exists
+    // Show/hide Add Contacts UI
     if (realContacts.length === 0) {
       if (addBox) addBox.style.display = 'flex';
       if (typeof removeHeaderAddButton === 'function') removeHeaderAddButton();
@@ -1278,15 +1284,17 @@
       if (typeof ensureHeaderAddButton === 'function') ensureHeaderAddButton();
     }
   
-    // guarantee token map exists
+    // token map
     let contactTokens = {};
     try { contactTokens = JSON.parse(localStorage.getItem('contact_tokens') || '{}') || {}; } catch { contactTokens = {}; }
   
-    // helper for random alphanumeric (used only for non-self tokens)
     const randAlnum = (len) => {
       const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
       return Array.from({ length: len }, () => chars.charAt(Math.floor(Math.random() * chars.length))).join('');
     };
+  
+    // Clear old DOM (you forgot this — also caused dupes)
+    container.innerHTML = "";
   
     list.forEach(item => {
       const contactId = (item.contact || '').toString();
@@ -1336,24 +1344,18 @@
   
         let t = null;
         if (isSelf) {
-          // deterministic self token so server & client match (server uses self_<username>)
           const deterministicToken = 'self_' + username;
           localStorage.setItem('__self_chat_token', deterministicToken);
           t = deterministicToken;
   
-          // Ensure server session is set before redirecting
           try {
-            const res = await fetch(window.location.origin + '/api/set_session', {
+            await fetch(window.location.origin + '/api/set_session', {
               method: 'POST',
               headers: {'Content-Type': 'application/json'},
               body: JSON.stringify({ username }),
               credentials: 'include'
             });
-            const j = await res.json().catch(() => ({}));
-          } catch (err) {
-            console.warn('⚠️ set_session failed', err);
-            // fall through — still try navigation (server will redirect if session absent)
-          }
+          } catch {}
         } else {
           try { contactTokens = JSON.parse(localStorage.getItem('contact_tokens') || '{}') || {}; } catch { contactTokens = {}; }
           const key = contactId || ('c_' + (item.phone || item.contact_name || randAlnum(8)));
@@ -1371,11 +1373,9 @@
         qs.set('t', t);
         if (profileLocal && profileLocal.name) qs.set('username', profileLocal.name);
   
-        // Redirect to chat page after ensuring session attempt
         window.location.href = '/chat?' + qs.toString();
       });
   
-      // MENU BUTTON (placeholder)
       const menuBtn = card.querySelector('.contact-menu-btn');
       if (menuBtn) {
         menuBtn.addEventListener('click', (e) => {
