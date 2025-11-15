@@ -299,19 +299,36 @@
     },
 
     async saveContactLocal(contact) {
+      // Create a local copy
       const entry = Object.assign({}, contact);
-      if (!entry.contact) entry.contact = entry.contact_name || entry.phone || ('c-' + Date.now());
+    
+      // Ensure contact ID
+      if (!entry.contact) {
+        entry.contact = entry.contact_name || entry.phone || 'c-' + Date.now() + '-' + Math.random().toString(36).slice(2,6);
+      }
+    
+      // Timestamp
       if (!entry.added_at) entry.added_at = Date.now();
+    
+      // Skip self or current user
       if (this._shouldSkipContact(entry)) return entry;
-      await withStore(STORE_CONTACTS, 'readwrite', s => s.put(entry));
+    
+      // Save locally
+      await withStore(STORE_CONTACTS, 'readwrite', store => store.put(entry));
+    
+      // Reset cache
       CONTACTS_CACHE = null;
+    
+      // Queue for server sync
       await this.enqueueOutbox({ type: 'contact', payload: entry });
+    
       return entry;
     },
-
+    
     async replaceContactsFull(serverContacts = []) {
       const self = this._ensureSelfEntryObject();
-      // get all local contacts except self
+    
+      // Step 1: Fetch all local contacts except self
       const localContacts = await withStore(STORE_CONTACTS, 'readonly', store => new Promise(res => {
         const arr = [];
         const req = store.openCursor();
@@ -325,41 +342,37 @@
         req.onerror = () => res(arr);
       }));
     
-      const mergedContacts = [...serverContacts];
+      // Step 2: Normalize server contacts
+      const normalizedServer = serverContacts.map(sc => ({
+        contact: sc.contact || sc.contact_name || ('c-' + Date.now() + '-' + Math.random().toString(36).slice(2,6)),
+        name: sc.contact_name || sc.name || '',
+        phone: sc.phone || '',
+        avatar_url: sc.avatar || sc.avatar_url || '',
+        added_at: sc.added_at || Date.now()
+      })).filter(c => String(c.contact).toLowerCase() !== 'self'); // remove accidental 'self'
+    
+      // Step 3: Merge local unsynced contacts with server contacts
+      const merged = [...normalizedServer];
       for (const lc of localContacts) {
-        if (!mergedContacts.find(c => c.contact === lc.contact)) {
-          mergedContacts.push(lc);
+        if (!merged.find(c => c.contact === lc.contact)) {
+          merged.push(lc);
         }
       }
     
-      // now replace store contents safely
+      // Step 4: Clear store and re-insert merged contacts + self
       await withStore(STORE_CONTACTS, 'readwrite', store => new Promise(resolve => {
         const req = store.clear();
         req.onsuccess = () => {
-          mergedContacts.forEach(c => store.put(c));
+          for (const c of merged) store.put(c);
           store.put(self);
           resolve(true);
         };
         req.onerror = () => resolve(true);
       }));
+    
+      // Reset cache
       CONTACTS_CACHE = null;
     }
-
-      for (const sc of serverContacts) {
-        const row = {
-          contact: sc.contact || sc.contact_name || ('c-' + Date.now() + '-' + Math.random().toString(36).slice(2,6)),
-          name: sc.contact_name || sc.name || '',
-          phone: sc.phone || '',
-          avatar_url: sc.avatar || sc.avatar_url || '',
-          added_at: sc.added_at || Date.now()
-        };
-        if (String(row.contact).toLowerCase() === 'self') continue;
-        await withStore(STORE_CONTACTS, 'readwrite', s => s.put(row));
-      }
-
-      await withStore(STORE_CONTACTS, 'readwrite', s => s.put(self));
-      CONTACTS_CACHE = null;
-    },
 
     async saveMessageLocal(msg) {
       const entry = Object.assign({}, msg);
