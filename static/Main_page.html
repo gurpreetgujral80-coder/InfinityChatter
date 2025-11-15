@@ -442,13 +442,28 @@
             }
             await withStore(STORE_OUTBOX, 'readwrite', s => s.delete(key));
           } else if (op.type === 'contact') {
+            const profile = JSON.parse(localStorage.getItem('infinity_profile') || '{}');
+            const owner = profile.username || profile.name;
+          
+            const payload = {
+              owner,
+              contacts: [
+                {
+                  contact: op.payload.contact,
+                  name: op.payload.name || op.payload.contact
+                }
+              ]
+            };
+          
             const res = await fetch('/api/contacts_add', {
               method: 'POST',
               credentials: 'include',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(op.payload)
+              body: JSON.stringify(payload)
             });
+          
             if (!res.ok) throw new Error('contact_sync_failed');
+          
             await withStore(STORE_OUTBOX, 'readwrite', s => s.delete(key));
           } else {
             await withStore(STORE_OUTBOX, 'readwrite', s => s.delete(key));
