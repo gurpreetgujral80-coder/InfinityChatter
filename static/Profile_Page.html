@@ -330,7 +330,7 @@
   
       // try server once
       try {
-        const res = await fetch('/api/contacts_add', { credentials: 'include', headers: { 'Accept': 'application/json' }});
+        const res = await fetch('/contacts_list', { credentials: 'include', headers: { 'Accept': 'application/json' }});
         if (res.ok) {
           const j = await res.json().catch(()=>null);
           if (!j) return localFallback();
