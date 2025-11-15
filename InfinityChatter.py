@@ -1407,9 +1407,23 @@ USER_SID = {}      # username -> sid
 CALL_INVITES = {}  # call_id -> info
 TYPING_USERS = set()
 
-touch_user_presence(username, online=None)
-if not username: return
-LAST_SEEN[username] = int(time.time())
+def touch_user_presence(username, online=None):
+    """
+    Update LAST_SEEN and optionally handle online/offline flag.
+    Keep this top-level (no extra indentation) so it is available to socket handlers.
+    """
+    try:
+        if not username:
+            return
+        LAST_SEEN[username] = int(time.time())
+        # optional: store an 'online' state if you want
+        if online is not None:
+            # example: store boolean in LAST_SEEN metadata (or use a separate map)
+            # PRESENCE[username] = {'online': bool(online), 'ts': LAST_SEEN[username]}
+            pass
+    except Exception:
+        # avoid crashing callers — log and continue
+        current_app.logger.exception("touch_user_presence failed for %r", username)
 
 # ---------- Avatar generation (WhatsApp-like initials SVG) ----------
 def initials_and_color(name):
