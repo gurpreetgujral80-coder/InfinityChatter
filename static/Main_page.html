@@ -1797,112 +1797,96 @@
 
 })();
 
-(function finalContactsPatch(){
-  console.log('⚙️ contacts_final_render_fix loaded');
+(function finalContactFix() {
 
-  function getContainer(){
-    return document.getElementById('contactsContainer')
-        || document.getElementById('contactsList')
-        || document.querySelector('.contacts')
-        || document.querySelector('#contacts')
-        || null;
-  }
+    const SAFE_DELAY = 350;   // wait for app JS to finish loading
+    const RENDER_DELAY = 200; // allow DOM to settle
 
-  function ensureSelfEntry(list){
-    try{
-      const profile = JSON.parse(localStorage.getItem('infinity_profile') || '{}');
-      const username = (profile.name || profile.username || 'You').toString();
-      const selfEntry = {
-        name: `${username} (You)`,
-        contact: 'self',
-        last_text: 'Message Yourself',
-        last_ts: Math.floor(Date.now()/1000),
-        avatar_url: profile.avatar_url || profile.avatar || null
-      };
-      if (!Array.isArray(list)) list = [];
-      if (!list.some(c => (c.contact || '').toLowerCase() === 'self')) list.unshift(selfEntry);
-      return list;
-    } catch (e) {
-      return list || [];
-    }
-  }
-
-  async function tryRenderOnce(){
-    const container = getContainer();
-    if (!container) {
-      // still not in DOM
-      return false;
-    }
-    if (typeof renderContacts !== 'function') {
-      // app's renderer not ready yet
-      return false;
+    function getContainer() {
+        return document.querySelector("#contactsContainer");
     }
 
-    let list = window.FINAL_CONTACTS;
-    if (!Array.isArray(list) || list.length === 0) {
-      try {
-        const stored = JSON.parse(localStorage.getItem('infinity_contacts') || '[]');
-        list = ensureSelfEntry(stored);
-      } catch (e) {
-        list = ensureSelfEntry([]);
-      }
-      // persist rebuilt contacts so other code can use it
-      window.FINAL_CONTACTS = list;
-      localStorage.setItem('infinity_contacts', JSON.stringify(list));
-      console.log('⚙️ Rebuilt FINAL_CONTACTS from localStorage or fallback:', list);
+    function ensureSelf(list) {
+        const profile = JSON.parse(localStorage.getItem("infinity_profile") || "{}");
+        const username = profile.name || profile.username || "You";
+
+        const selfEntry = {
+            name: `${username} (You)`,
+            contact: "self",
+            last_text: "Message Yourself",
+            last_ts: Math.floor(Date.now() / 1000),
+            avatar_url: profile.avatar || profile.avatar_url || null
+        };
+
+        if (!Array.isArray(list)) list = [];
+        if (!list.some(c => (c.contact || "").toLowerCase() === "self")) {
+            list.unshift(selfEntry);
+        }
+        return list;
     }
 
-    try {
-      renderContacts(list);
-      console.log('⚙️ renderContacts invoked by contacts_final_render_fix');
-      return true;
-    } catch (e) {
-      console.warn('⚠️ renderContacts threw:', e);
-      return false;
+    function forceVisible() {
+        const container = getContainer();
+        if (!container) return;
+
+        container.style.display = "block";
+        container.style.visibility = "visible";
+        container.style.opacity = "1";
+
+        const addBox = document.getElementById("addContactsBox");
+        if (addBox) addBox.style.display = "flex";
+
+        const cards = container.querySelectorAll(".contact-card");
+        cards.forEach(card => {
+            card.style.display = "flex";
+            card.style.opacity = "1";
+            card.style.visibility = "visible";
+        });
+
+        console.log("✔️ forced-visible contacts");
     }
-  }
 
-  // Try repeatedly until success (gives the rest of the page time to initialize)
-  let attempts = 0;
-  const maxAttempts = 30;
-  const intervalMs = 200;
-  const poller = setInterval(async () => {
-    attempts++;
-    const ok = await tryRenderOnce();
-    if (ok || attempts > maxAttempts) {
-      clearInterval(poller);
-      if (!ok) console.warn('contacts_final_render_fix: giving up after', attempts, 'attempts');
+    function runFinalRender() {
+        const container = getContainer();
+        if (!container) {
+            console.warn("⚠️ No container yet — retrying in 200ms");
+            return setTimeout(runFinalRender, 200);
+        }
+
+        if (typeof renderContacts !== "function") {
+            console.warn("⚠️ renderContacts not ready — retrying in 200ms");
+            return setTimeout(runFinalRender, 200);
+        }
+
+        // Load from storage
+        let list = [];
+        try {
+            list = JSON.parse(localStorage.getItem("infinity_contacts") || "[]");
+        } catch (e) {}
+
+        // Inject self
+        list = ensureSelf(list);
+
+        // Save
+        window.FINAL_CONTACTS = list;
+        localStorage.setItem("infinity_contacts", JSON.stringify(list));
+
+        console.log("📌 Final contact list prepared:", list);
+
+        // Render
+        renderContacts(list);
+
+        // Fix UI hiding issues
+        setTimeout(forceVisible, 80);
+
+        console.log("📌 Final contact render complete");
     }
-  }, intervalMs);
 
-  // Final safety pass after load
-  window.addEventListener('load', () => {
-    setTimeout(() => tryRenderOnce(), 50);
-  });
+    // Run ONCE after app loads fully
+    window.addEventListener("load", () => {
+        setTimeout(runFinalRender, SAFE_DELAY);
+    });
 
-  // Manual trigger
-  window.forceContactsRender = async function(){
-    return tryRenderOnce();
-  };
-})();
-
-// --- Make self-contact visible even when it's the only one ---
-(function fixSelfChatVisibility(){
-    const container = document.getElementById("contactsContainer");
-    const addBox = document.getElementById("addContactsBox");
-
-    if (!container) return;
-
-    // The renderer put only 1 contact → self chat
-    // Many themes hide the contact list if only 1 exists, so force-visible:
-    container.style.display = "block";
-    container.style.visibility = "visible";
-    container.style.opacity = "1";
-
-    // Keep "add contact" box visible per your requirement:
-    if (addBox) addBox.style.display = "flex";
-
-    console.log("✔️ Self chat visibility patched");
 })();
 
 </script>
