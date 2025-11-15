@@ -442,22 +442,13 @@
             }
             await withStore(STORE_OUTBOX, 'readwrite', s => s.delete(key));
           } else if (op.type === 'contact') {
-            const res = await fetch('/api/contacts', {
+            const res = await fetch('/api/contacts_add', {
               method: 'POST',
               credentials: 'include',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify(op.payload)
             });
             if (!res.ok) throw new Error('contact_sync_failed');
-            await withStore(STORE_OUTBOX, 'readwrite', s => s.delete(key));
-          } else if (op.type === 'status') {
-            const res = await fetch('/api/statuses', {
-              method: 'POST',
-              credentials: 'include',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(op.payload)
-            });
-            if (!res.ok) throw new Error('status_sync_failed');
             await withStore(STORE_OUTBOX, 'readwrite', s => s.delete(key));
           } else {
             await withStore(STORE_OUTBOX, 'readwrite', s => s.delete(key));
@@ -471,7 +462,7 @@
 
     async _pullFromServer() {
       try {
-        const contactsRes = await fetch('/api/contacts', { credentials: 'include' });
+        const contactsRes = await fetch('/api/contacts_add', { credentials: 'include' });
         if (contactsRes && contactsRes.ok) {
           const j = await contactsRes.json().catch(()=>null);
           const contacts = j && j.contacts ? j.contacts : (Array.isArray(j) ? j : []);
@@ -507,21 +498,6 @@
           if (maxTs) await metaSet('last_server_msg_ts', maxTs);
         }
       } catch (e) { /* ignore */ }
-
-      try {
-        const statusesRes = await fetch('/api/statuses', { credentials: 'include' });
-        if (statusesRes && statusesRes.ok) {
-          const j = await statusesRes.json().catch(()=>null);
-          const sts = j && j.statuses ? j.statuses : (Array.isArray(j) ? j : []);
-          for (const s of sts) {
-            const ss = Object.assign({}, s);
-            if (!ss.id) ss.id = 'srv-' + Date.now() + '-' + Math.random().toString(36).slice(2,6);
-            ss.createdAt = ss.createdAt || ss.created_at || Date.now();
-            await withStore(STORE_STATUSES, 'readwrite', store => store.put(ss));
-          }
-        }
-      } catch (e) { /* ignore */ }
-
       return true;
     },
 
