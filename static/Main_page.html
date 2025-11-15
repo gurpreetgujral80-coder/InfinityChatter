@@ -1597,35 +1597,6 @@
   loadContacts();
 })();
 
-(async function offlineContactsBoot() {
-  let profile = {};
-  try { profile = JSON.parse(localStorage.getItem("infinity_profile") || "{}"); }
-  catch { profile = {}; }
-
-  // read localStorage contacts (fallback)
-  let localContacts = [];
-  try { localContacts = JSON.parse(localStorage.getItem("infinity_contacts") || "[]"); }
-  catch { localContacts = []; }
-
-  // ensure a self token for internal use (harmless)
-  let selfToken = localStorage.getItem("__self_chat_token");
-  if (!selfToken) {
-    const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-    selfToken =
-      Array.from({ length: 20 }, () => chars[Math.floor(Math.random() * chars.length)]).join("") +
-      "_self";
-    localStorage.setItem("__self_chat_token", selfToken);
-  }
-
-  // remove any persisted "self" entries — loadContacts will reliably add one if needed
-  let cleaned = Array.isArray(localContacts) ? [...localContacts].filter(c => {
-    return String((c || {}).contact || "").toLowerCase() !== 'self';
-  }) : [];
-
-  try { localStorage.setItem("infinity_contacts", JSON.stringify(cleaned)); } catch (e) {}
-
-})();
-
 // === InfinityChatter: exact header UI + iOS nav style + corrected nav routing ===
 (function() {
   // ---- helpers ----
