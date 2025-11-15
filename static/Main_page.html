@@ -1553,7 +1553,7 @@
   try { localContacts = JSON.parse(localStorage.getItem("infinity_contacts") || "[]"); }
   catch { localContacts = []; }
 
-  // ---- Ensure self token ----
+  // ---- Ensure self token (harmless) ----
   let selfToken = localStorage.getItem("__self_chat_token");
   if (!selfToken) {
     const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
@@ -1563,16 +1563,20 @@
     localStorage.setItem("__self_chat_token", selfToken);
   }
 
-  // ---- Save merged back ----
-  try { localStorage.setItem("infinity_contacts", JSON.stringify(merged)); }
-  catch {}
+  // ---- IMPORTANT: build merged array and remove any existing "self" entries ----
+  // ensure merged is declared before any use
+  let merged = Array.isArray(localContacts) ? [...localContacts] : [];
+  merged = merged.filter(c => String((c || {}).contact || "").toLowerCase() !== "self");
 
-  // ---- Render contacts (your function) ----
+  // ---- Save merged back (offline fallback) ----
+  try { localStorage.setItem("infinity_contacts", JSON.stringify(merged)); } catch {}
+
+  // ---- Render contacts (if renderer exists) ----
   if (typeof window.renderContacts === "function") {
-    console.log("📌 Rendering contacts:", merged);
+    // (you can remove the next console.log if you want no logs at all)
     window.renderContacts(merged);
   } else {
-    console.error("❌ renderContacts() not found — ensure your contacts JS loaded first.");
+    // fail silently since main page handles rendering later
   }
 })();
 
