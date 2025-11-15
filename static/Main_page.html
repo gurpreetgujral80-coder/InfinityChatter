@@ -309,24 +309,41 @@
       return entry;
     },
 
-    // replace local contacts with server list, but preserve single canonical 'self'
     async replaceContactsFull(serverContacts = []) {
       const self = this._ensureSelfEntryObject();
-      await withStore(STORE_CONTACTS, 'readwrite', store => new Promise((resolve) => {
+      // get all local contacts except self
+      const localContacts = await withStore(STORE_CONTACTS, 'readonly', store => new Promise(res => {
+        const arr = [];
         const req = store.openCursor();
-        req.onsuccess = (e) => {
+        req.onsuccess = e => {
           const cur = e.target.result;
-          if (!cur) return resolve(true);
+          if (!cur) return res(arr);
           const key = String(cur.primaryKey || cur.value.contact || '').toLowerCase();
-          if (key === 'self') {
-            cur.continue();
-          } else {
-            try { store.delete(cur.primaryKey); } catch (ignored) {}
-            cur.continue();
-          }
+          if (key !== 'self') arr.push(cur.value);
+          cur.continue();
+        };
+        req.onerror = () => res(arr);
+      }));
+    
+      const mergedContacts = [...serverContacts];
+      for (const lc of localContacts) {
+        if (!mergedContacts.find(c => c.contact === lc.contact)) {
+          mergedContacts.push(lc);
+        }
+      }
+    
+      // now replace store contents safely
+      await withStore(STORE_CONTACTS, 'readwrite', store => new Promise(resolve => {
+        const req = store.clear();
+        req.onsuccess = () => {
+          mergedContacts.forEach(c => store.put(c));
+          store.put(self);
+          resolve(true);
         };
         req.onerror = () => resolve(true);
       }));
+      CONTACTS_CACHE = null;
+    }
 
       for (const sc of serverContacts) {
         const row = {
