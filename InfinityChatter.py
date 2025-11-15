@@ -3318,6 +3318,14 @@ socket.on('connect_error', (err) => console.error('❌ socket connect_error', er
       };
   };
 
+  function scrollChatToBottom() {
+      const chatBox = document.getElementById('chatMessages') || document.querySelector('.messages');
+      if (!chatBox) return;
+      chatBox.scrollTop = chatBox.scrollHeight;
+  }
+    
+    // Automatically scroll when chat loads
+  document.addEventListener('DOMContentLoaded', scrollChatToBottom);
   async function sendMessage(textArg, attsArg) {
     const inputEl = document.querySelector('#msg') || document.querySelector('#textarea');
     const text = (typeof textArg === 'string') ? textArg.trim() : (inputEl ? (inputEl.value || '').trim() : '');
@@ -7066,15 +7074,6 @@ window.addEventListener('message', (ev) => {
     });
   }
 });
-
-function scrollChatToBottom() {
-  const chatBox = document.getElementById('chatMessages') || document.querySelector('.messages');
-  if (!chatBox) return;
-  chatBox.scrollTop = chatBox.scrollHeight;
-}
-
-// Automatically scroll when chat loads
-document.addEventListener('DOMContentLoaded', scrollChatToBottom);
 
 </script>
 </body>
