@@ -998,7 +998,6 @@
       else socket.on('connect', () => socket.emit('register_socket', { username }));
 
       socket.on('contact_added_by_invite', data => {
-        console.log('New contact added via invite:', data);
         try { loadContacts(); } catch (e) { console.warn('loadContacts reload failed', e); }
         if (typeof showToast === 'function') showToast(`New contact: ${data.new_name}`);
         else {
@@ -1169,18 +1168,6 @@
       const data = await resp.json();
       let serverContacts = data.contacts || [];
   
-      console.log("📌 Server contacts:", serverContacts);
-  
-      // 4️⃣ Local contacts
-      let localContacts = [];
-      try {
-        localContacts = JSON.parse(localStorage.getItem("infinity_contacts") || "[]");
-      } catch {
-        localContacts = [];
-      }
-  
-      console.log("📌 Local contacts:", localContacts);
-  
       // 5️⃣ Merge local + server (server wins)
       const merged = [...localContacts];
   
@@ -1190,28 +1177,8 @@
         else merged.push(sc);
       });
   
-      // 6️⃣ Always add self-chat
-      if (username) {
-        const selfEntry = {
-          name: `${username} (You)`,
-          contact: "self",
-          last_text: "Message Yourself",
-          last_ts: Math.floor(Date.now() / 1000),
-          avatar_url: profileLocal.avatar || null
-        };
-  
-        const hasSelf = merged.some(c => c.contact === "self");
-        if (!hasSelf) merged.unshift(selfEntry);
-      }
-  
-      console.log("📌 Final merged contacts:", merged);
-  
-      // 7️⃣ Save to localStorage for offline fallback
-      localStorage.setItem("infinity_contacts", JSON.stringify(merged));
-  
       // 8️⃣ Make available globally for debug + fallback renderer
       window.FINAL_CONTACTS = merged;
-      console.log("📌 FINAL_CONTACTS set:", window.FINAL_CONTACTS);
   
       // 9️⃣ Render UI
       renderContacts(merged);
@@ -1404,7 +1371,6 @@
               credentials: 'include'
             });
             const j = await res.json().catch(() => ({}));
-            console.log('✅ Session set response:', j);
           } catch (err) {
             console.warn('⚠️ set_session failed', err);
             // fall through — still try navigation (server will redirect if session absent)
@@ -1425,8 +1391,6 @@
         const qs = new URLSearchParams();
         qs.set('t', t);
         if (profileLocal && profileLocal.name) qs.set('username', profileLocal.name);
-  
-        console.log('✅ Chat debug info:', { contactId, isSelf, token: t, url: '/chat?' + qs.toString() });
   
         // Redirect to chat page after ensuring session attempt
         window.location.href = '/chat?' + qs.toString();
@@ -1853,8 +1817,6 @@
       // Replace main content area
       const appRoot = document.getElementById('main') || document.body;
       appRoot.innerHTML = newContent.innerHTML;
-
-      console.log('✅ Self chat loaded dynamically');
     } catch (err) {
       console.error('⚠️ Failed to load self chat dynamically:', err);
       window.location.assign(`/chat?t=${encodeURIComponent(token)}&username=${encodeURIComponent(username)}`);
