@@ -140,7 +140,7 @@
   </div>
 <script>
 (function () {
-  const DB_NAME = 'infinity_offline_v3';
+  const DB_NAME = 'infinity_offline_v4';
   const DB_VERSION = 2;
   const STORE_MESSAGES = 'messages';
   const STORE_CONTACTS = 'contacts';
@@ -199,35 +199,15 @@
   }
 
   async function metaGet(key) {
-    return withStore(STORE_META, 'readonly', store => new Promise((res) => {
+    return withStore(STORE_META, 'readonly', store => new Promise(res => {
       const r = store.get(key);
       r.onsuccess = () => res(r.result ? r.result.value : null);
       r.onerror = () => res(null);
     }));
   }
+
   async function metaSet(key, value) {
     return withStore(STORE_META, 'readwrite', store => store.put({ key, value }));
-  }
-
-  // cleanup stray 'self*' contact keys (keep exact 'self' only)
-  async function _cleanupSelfVariants() {
-    try {
-      await withStore(STORE_CONTACTS, 'readwrite', store => new Promise((res) => {
-        const req = store.openCursor();
-        req.onsuccess = (e) => {
-          const cur = e.target.result;
-          if (!cur) return res(true);
-          const key = String(cur.primaryKey || cur.value.contact || '').toLowerCase();
-          if (key.startsWith('self') && key !== 'self') {
-            try { store.delete(cur.primaryKey); } catch (ignored) {}
-          }
-          cur.continue();
-        };
-        req.onerror = () => res(true);
-      }));
-    } catch (e) {
-      // best-effort cleanup
-    }
   }
 
   const OfflineDB = {
@@ -258,9 +238,7 @@
 
     async init() {
       await openDB();
-      await _cleanupSelfVariants();
       window.addEventListener('online', () => { this.syncNow().catch(()=>{}); });
-      // warm caches minimally
       CONTACTS_CACHE = null;
     },
 
@@ -269,13 +247,12 @@
       const cid = String(row.contact).toLowerCase();
       if (cid === 'self') return true;
       const me = this._getProfileId();
-      if (me && String(me).toLowerCase() === cid) return true;
-      return false;
+      return me && String(me).toLowerCase() === cid;
     },
 
     async listContacts() {
       if (CONTACTS_CACHE) return CONTACTS_CACHE.slice();
-      const arr = await withStore(STORE_CONTACTS, 'readonly', store => new Promise((res) => {
+      const arr = await withStore(STORE_CONTACTS, 'readonly', store => new Promise(res => {
         const out = [];
         const req = store.openCursor();
         req.onsuccess = e => {
@@ -286,140 +263,74 @@
         };
         req.onerror = () => res([]);
       }));
-      // remove stray self variants, keep only exact 'self'
-      const nonSelf = arr.filter(c => {
-        const cid = String((c || {}).contact || '').toLowerCase();
-        return cid !== 'self';
-      });
-
       const self = this._ensureSelfEntryObject();
-      const merged = [self].concat(nonSelf);
+      const merged = [self, ...arr.filter(c => String(c.contact).toLowerCase() !== 'self')];
       CONTACTS_CACHE = merged;
       return merged.slice();
     },
 
     async saveContactLocal(contact) {
-      // Create a local copy
       const entry = Object.assign({}, contact);
-    
-      // Ensure contact ID
-      if (!entry.contact) {
-        entry.contact = entry.contact_name || entry.phone || 'c-' + Date.now() + '-' + Math.random().toString(36).slice(2,6);
-      }
-    
-      // Timestamp
+      if (!entry.contact) entry.contact = entry.contact_name || entry.phone || 'c-' + Date.now() + '-' + Math.random().toString(36).slice(2,6);
       if (!entry.added_at) entry.added_at = Date.now();
-    
-      // Skip self or current user
       if (this._shouldSkipContact(entry)) return entry;
-    
-      // Save locally
       await withStore(STORE_CONTACTS, 'readwrite', store => store.put(entry));
-    
-      // Reset cache
       CONTACTS_CACHE = null;
-    
-      // Queue for server sync
       await this.enqueueOutbox({ type: 'contact', payload: entry });
-    
       return entry;
     },
-    
+
     async replaceContactsFull(serverContacts = []) {
       const self = this._ensureSelfEntryObject();
-    
-      // 1️⃣ Fetch all local contacts except self
       const localContacts = await withStore(STORE_CONTACTS, 'readonly', store => new Promise(res => {
         const arr = [];
         const req = store.openCursor();
         req.onsuccess = e => {
           const cur = e.target.result;
           if (!cur) return res(arr);
-          const key = String(cur.primaryKey || cur.value.contact || '').toLowerCase();
-          if (key !== 'self') arr.push(cur.value);
+          if (String(cur.primaryKey || cur.value.contact || '').toLowerCase() !== 'self') arr.push(cur.value);
           cur.continue();
         };
         req.onerror = () => res(arr);
       }));
-    
-      // 2️⃣ Normalize server contacts
+
       const normalizedServer = (serverContacts || []).map(sc => ({
         contact: sc.contact || sc.contact_name || ('c-' + Date.now() + '-' + Math.random().toString(36).slice(2,6)),
         name: sc.contact_name || sc.name || '',
         phone: sc.phone || '',
         avatar_url: sc.avatar || sc.avatar_url || '',
         added_at: sc.added_at || Date.now()
-      })).filter(c => String(c.contact).toLowerCase() !== 'self'); // prevent accidental 'self'
-    
-      // 3️⃣ Merge local contacts that are not already in server list
+      })).filter(c => String(c.contact).toLowerCase() !== 'self');
+
+      // merge server with local without deleting anything
       const merged = [...normalizedServer];
       for (const lc of localContacts) {
         if (!merged.some(c => c.contact === lc.contact)) merged.push(lc);
       }
-    
-      // 4️⃣ Clear store and insert merged contacts + self safely
-      await withStore(STORE_CONTACTS, 'readwrite', store => new Promise(resolve => {
-        const clearReq = store.clear();
-        clearReq.onsuccess = () => {
-          try {
-            merged.forEach(c => store.put(c));
-            store.put(self);
-          } catch (err) {
-            console.error('Error inserting contacts:', err);
-          }
-          resolve(true);
-        };
-        clearReq.onerror = () => resolve(true);
-      }));
-    
+
+      for (const c of merged) await withStore(STORE_CONTACTS, 'readwrite', s => s.put(c));
+      await withStore(STORE_CONTACTS, 'readwrite', s => s.put(self));
       CONTACTS_CACHE = null;
     },
-    
+
     async saveMessageLocal(msg) {
       const entry = Object.assign({}, msg);
-    
-      // Ensure message ID
       if (!entry.id) entry.id = 'local-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8);
-    
-      // Ensure contact
       entry.contact = entry.contact || entry.to || entry.peer || 'unknown';
-    
-      // Ensure timestamp
       entry.created_at = entry.created_at || Date.now();
-    
-      // Save to IndexedDB safely
-      await withStore(STORE_MESSAGES, 'readwrite', store => new Promise((resolve, reject) => {
-        try {
-          const req = store.put(entry);
-          req.onsuccess = () => resolve(true);
-          req.onerror = () => reject(req.error);
-        } catch (err) {
-          reject(err);
-        }
-      }));
-    
-      // Update in-memory last timestamp
+      await withStore(STORE_MESSAGES, 'readwrite', s => s.put(entry));
       const lastTs = MESSAGES_INDEX_CACHE[entry.contact] || 0;
       if ((entry.created_at || 0) > lastTs) MESSAGES_INDEX_CACHE[entry.contact] = entry.created_at;
-    
-      // Queue for server sync if not a server-originated message
-      if (!this._looksServerMessage(entry)) {
-        try {
-          await this.enqueueOutbox({ type: 'message', payload: entry });
-        } catch (err) {
-          console.warn('Failed to enqueue message:', err);
-        }
-      }
-    
+      if (!this._looksServerMessage(entry)) await this.enqueueOutbox({ type: 'message', payload: entry });
       return entry;
-    }
+    },
 
     async getMessagesForContact(contactId, { since = 0, limit = 1000 } = {}) {
-      return withStore(STORE_MESSAGES, 'readonly', store => new Promise((res) => {
+      return withStore(STORE_MESSAGES, 'readonly', store => new Promise(res => {
         const out = [];
         const idx = store.index('created_at');
         const req = idx.openCursor(null, 'prev');
-        req.onsuccess = (e) => {
+        req.onsuccess = e => {
           const cur = e.target.result;
           if (!cur) return res(out);
           const v = cur.value;
@@ -436,14 +347,14 @@
       const entry = Object.assign({}, status);
       if (!entry.id) entry.id = 's-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8);
       if (!entry.createdAt) entry.createdAt = Date.now();
-      if (!entry.expiresAt) entry.expiresAt = entry.createdAt + (24 * 60 * 60 * 1000);
+      if (!entry.expiresAt) entry.expiresAt = entry.createdAt + (24*60*60*1000);
       await withStore(STORE_STATUSES, 'readwrite', s => s.put(entry));
       await this.enqueueOutbox({ type: 'status', payload: entry });
       return entry;
     },
 
     async listStatuses() {
-      return withStore(STORE_STATUSES, 'readonly', store => new Promise((res) => {
+      return withStore(STORE_STATUSES, 'readonly', store => new Promise(res => {
         const out = [];
         const req = store.openCursor(null, 'prev');
         req.onsuccess = e => {
@@ -463,7 +374,7 @@
     },
 
     async _drainOutboxOnce() {
-      const ops = await withStore(STORE_OUTBOX, 'readonly', s => new Promise((res) => {
+      const ops = await withStore(STORE_OUTBOX, 'readonly', s => new Promise(res => {
         const arr = [];
         const r = s.openCursor();
         r.onsuccess = e => {
@@ -480,98 +391,52 @@
         try {
           const op = value.op;
           if (op.type === 'message') {
-            const payload = {
-              text: op.payload.text || '',
-              attachments: op.payload.attachments || [],
-              contact: op.payload.contact || op.payload.to || op.payload.peer,
-              sender: op.payload.sender || (JSON.parse(localStorage.getItem('infinity_profile') || '{}').name || undefined),
-              created_at: op.payload.created_at || Date.now()
-            };
-            const res = await fetch('/send_message', {
-              method: 'POST',
-              credentials: 'include',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(payload)
-            });
-            if (!res.ok) throw new Error('send_failed');
-            const j = await res.json().catch(()=>null);
-            if (j && j.message && j.message.id) {
-              await withStore(STORE_MESSAGES, 'readwrite', s => s.put(Object.assign({}, j.message)));
-            }
-            await withStore(STORE_OUTBOX, 'readwrite', s => s.delete(key));
+            await fetch('/send_message', { method:'POST', credentials:'include', headers:{'Content-Type':'application/json'}, body: JSON.stringify(op.payload) });
           } else if (op.type === 'contact') {
-            const profile = JSON.parse(localStorage.getItem('infinity_profile') || '{}');
-            const owner = profile.username || profile.name;
-          
-            const payload = {
-              owner,
-              contacts: [
-                {
-                  contact: op.payload.contact,
-                  name: op.payload.name || op.payload.contact
-                }
-              ]
-            };
-          
-            const res = await fetch('/api/contacts_add', {
-              method: 'POST',
-              credentials: 'include',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(payload)
-            });
-          
-            if (!res.ok) throw new Error('contact_sync_failed');
-          
-            await withStore(STORE_OUTBOX, 'readwrite', s => s.delete(key));
-          } else {
-            await withStore(STORE_OUTBOX, 'readwrite', s => s.delete(key));
+            await fetch('/api/contacts_add', { method:'POST', credentials:'include', headers:{'Content-Type':'application/json'}, body: JSON.stringify({contacts:[op.payload]}) });
+          } else if (op.type === 'status') {
+            await fetch('/api/status_add', { method:'POST', credentials:'include', headers:{'Content-Type':'application/json'}, body: JSON.stringify(op.payload) });
           }
-        } catch (err) {
-          throw err;
+          await withStore(STORE_OUTBOX, 'readwrite', s => s.delete(key));
+        } catch(e) {
+          console.warn('Outbox sync failed', e);
         }
       }
       return true;
     },
 
     async _pullFromServer() {
+      // Fetch contacts
       try {
-        const contactsRes = await fetch('/contacts_list', { credentials: 'include' });
-        if (contactsRes && contactsRes.ok) {
-          const j = await contactsRes.json().catch(()=>null);
-          const contacts = j && j.contacts ? j.contacts : (Array.isArray(j) ? j : []);
-          const normalized = contacts.map(c => ({
-            contact: c.contact || c.contact_name || (c.phone ? 'phone:'+c.phone : ('c-'+Date.now()+'-'+Math.random().toString(36).slice(2,6))),
-            name: c.contact_name || c.name || '',
-            phone: c.phone || '',
-            avatar_url: c.avatar || c.avatar_url || '',
-            added_at: c.added_at || Date.now()
-          }));
-          await this.replaceContactsFull(normalized);
+        const res = await fetch('/contacts_list', { credentials:'include' });
+        if (res.ok) {
+          const j = await res.json().catch(()=>null);
+          const contacts = j?.contacts || [];
+          await this.replaceContactsFull(contacts);
         }
-      } catch (e) { /* ignore */ }
+      } catch(e){}
 
+      // Fetch messages
       try {
-        let lastMsgTs = await metaGet('last_server_msg_ts') || 0;
-        const messagesRes = await fetch('/api/messages?since=' + encodeURIComponent(lastMsgTs), { credentials: 'include' });
-        if (messagesRes && messagesRes.ok) {
-          const j = await messagesRes.json().catch(()=>null);
-          const msgs = j && j.messages ? j.messages : (Array.isArray(j) ? j : []);
-          let maxTs = lastMsgTs || 0;
+        const lastMsgTs = await metaGet('last_server_msg_ts') || 0;
+        const res = await fetch('/api/messages?since=' + encodeURIComponent(lastMsgTs), { credentials:'include' });
+        if (res.ok) {
+          const j = await res.json().catch(()=>null);
+          const msgs = j?.messages || [];
+          let maxTs = lastMsgTs;
           for (const m of msgs) {
             const mm = Object.assign({}, m);
-            if (!mm.id) mm.id = 'srv-' + (mm.created_at || Date.now()) + '-' + Math.random().toString(36).slice(2,6);
-            mm.created_at = mm.created_at || mm.createdAt || Date.now();
-            mm.contact = mm.contact || mm.to || mm.peer || mm.sender || 'unknown';
+            mm.id = mm.id || 'srv-' + Date.now() + '-' + Math.random().toString(36).slice(2,6);
+            mm.created_at = mm.created_at || Date.now();
+            mm.contact = mm.contact || mm.to || mm.peer || 'unknown';
             await withStore(STORE_MESSAGES, 'readwrite', s => s.put(mm));
-            if ((mm.created_at || 0) > maxTs) maxTs = mm.created_at;
+            if (mm.created_at > maxTs) maxTs = mm.created_at;
             const c = mm.contact;
-            const prev = MESSAGES_INDEX_CACHE[c] || 0;
-            if ((mm.created_at || 0) > prev) MESSAGES_INDEX_CACHE[c] = mm.created_at;
+            MESSAGES_INDEX_CACHE[c] = Math.max(MESSAGES_INDEX_CACHE[c] || 0, mm.created_at);
           }
-          if (maxTs) await metaSet('last_server_msg_ts', maxTs);
+          await metaSet('last_server_msg_ts', maxTs);
         }
-      } catch (e) { /* ignore */ }
-      return true;
+      } catch(e){}
     },
 
     async syncNow() {
@@ -580,131 +445,48 @@
       if (typeof this._onSyncStart === 'function') this._onSyncStart();
       try {
         let attempt = 0;
-        while (true) {
-          try {
-            await this._drainOutboxOnce();
-            break;
-          } catch (err) {
-            attempt++;
-            if (attempt > 4) throw err;
-            await new Promise(r => setTimeout(r, BACKOFF_BASE * attempt));
-          }
+        while(true){
+          try { await this._drainOutboxOnce(); break; } 
+          catch(e){ attempt++; if(attempt>4) throw e; await new Promise(r=>setTimeout(r,BACKOFF_BASE*attempt)); }
         }
         await this._pullFromServer();
         CONTACTS_CACHE = null;
-        try {
-          if (typeof window.renderContacts === 'function') {
-            const all = await this.listContacts();
-            window.renderContacts(all);
-          }
-        } catch (e) {}
-        if (typeof this._onSyncEnd === 'function') this._onSyncEnd(null);
+        if(typeof window.renderContacts==='function'){
+          const all = await this.listContacts();
+          window.renderContacts(all);
+        }
+        if(typeof this._onSyncEnd==='function') this._onSyncEnd(null);
         return true;
-      } catch (err) {
-        if (typeof this._onSyncEnd === 'function') this._onSyncEnd(err);
-        throw err;
+      } catch(e){
+        if(typeof this._onSyncEnd==='function') this._onSyncEnd(e);
+        throw e;
       } finally {
         this._isSyncing = false;
       }
     },
 
     _startPeriodicSync() {
-      if (this._syncTimer) clearInterval(this._syncTimer);
-      this._syncTimer = setInterval(() => {
-        if (navigator.onLine) this.syncNow().catch(()=>{});
-      }, SYNC_INTERVAL_MS);
+      if(this._syncTimer) clearInterval(this._syncTimer);
+      this._syncTimer = setInterval(()=>{ if(navigator.onLine) this.syncNow().catch(()=>{}); }, SYNC_INTERVAL_MS);
     },
 
-    _looksServerMessage(m) {
-      if (!m || !m.id) return false;
-      return String(m.id).match(/^[0-9]+$/);
-    },
+    _looksServerMessage(m) { return m?.id && /^[0-9]+$/.test(String(m.id)); },
 
-    async exportBackup(filename = null) {
-      const contacts = await this.listContacts();
-      const statuses = await this.listStatuses();
-      const messages = await withStore(STORE_MESSAGES, 'readonly', store => new Promise((res) => {
-        const arr = [];
-        const req = store.openCursor();
-        req.onsuccess = e => {
-          const cur = e.target.result; if (!cur) return res(arr);
-          arr.push(cur.value); cur.continue();
-        };
-        req.onerror = () => res(arr);
-      }));
-      const outbox = await withStore(STORE_OUTBOX, 'readonly', store => new Promise((res) => {
-        const arr = [];
-        const r = store.openCursor();
-        r.onsuccess = e => {
-          const cur = e.target.result; if (!cur) return res(arr);
-          arr.push(cur.value); cur.continue();
-        };
-        r.onerror = () => res(arr);
-      }));
-      const meta = {
-        last_server_msg_ts: await metaGet('last_server_msg_ts') || 0,
-        app_version: await metaGet('app_version') || null
-      };
-      const full = { exported_at: Date.now(), contacts, statuses, messages, outbox, meta };
-      const blob = new Blob([JSON.stringify(full, null, 2)], { type: 'application/json' });
-      const fname = filename || `infinity_backup_${(new Date()).toISOString().replace(/[:.]/g,'-')}.json`;
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url; a.download = fname; document.body.appendChild(a); a.click(); a.remove();
-      setTimeout(()=> URL.revokeObjectURL(url), 60000);
-      return true;
-    },
-
-    async importBackupFile(file) {
-      const text = await file.text();
-      const obj = JSON.parse(text);
-      if (!obj) throw new Error('invalid_backup');
-      const { contacts = [], statuses = [], messages = [], outbox = [], meta = {} } = obj;
-      for (const c of contacts) await withStore(STORE_CONTACTS, 'readwrite', s => s.put(c));
-      for (const s of statuses) await withStore(STORE_STATUSES, 'readwrite', s2 => s2.put(s));
-      for (const m of messages) await withStore(STORE_MESSAGES, 'readwrite', s3 => s3.put(m));
-      for (const o of outbox) await withStore(STORE_OUTBOX, 'readwrite', s4 => s4.add(o));
-      if (meta && meta.last_server_msg_ts) await metaSet('last_server_msg_ts', meta.last_server_msg_ts);
-      if (meta && meta.app_version) await metaSet('app_version', meta.app_version);
-      CONTACTS_CACHE = null;
-      return true;
-    },
-
-    onSyncStart(fn) { this._onSyncStart = fn; },
-    onSyncEnd(fn) { this._onSyncEnd = fn; }
+    onSyncStart(fn){ this._onSyncStart = fn; },
+    onSyncEnd(fn){ this._onSyncEnd = fn; }
   };
 
   window.OfflineDB = OfflineDB;
 
-  async function startOfflineDB(options = { checkAppVersion: true }) {
-    if (window._offlineDBStarted) return;
+  async function startOfflineDB() {
+    if(window._offlineDBStarted) return;
     window._offlineDBStarted = true;
-
-    const profile = JSON.parse(localStorage.getItem('infinity_profile') || '{}');
-    const username = profile.username || profile.name || null;
 
     await OfflineDB.init();
     OfflineDB._startPeriodicSync();
 
-    try { await OfflineDB.listContacts(); } catch (e) {}
-    try { await OfflineDB.syncNow(); } catch (e) {}
-
-    if (options && options.checkAppVersion) {
-      try {
-        const res = await fetch('/api/app_version', { credentials: 'include' });
-        if (res && res.ok) {
-          const j = await res.json().catch(()=>null);
-          const serverVer = j && j.version ? j.version : null;
-          const localVer = await metaGet('app_version');
-          if (serverVer && serverVer !== localVer) {
-            await metaSet('app_version', serverVer);
-            try { location.reload(true); } catch (e) { location.reload(); }
-          } else {
-            if (serverVer) await metaSet('app_version', serverVer);
-          }
-        }
-      } catch (e) {}
-    }
+    try { await OfflineDB.listContacts(); } catch(e){}
+    try { await OfflineDB.syncNow(); } catch(e){}
   }
 
   window.startOfflineDB = startOfflineDB;
