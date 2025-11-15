@@ -419,16 +419,22 @@
   function updateInstallBoxState() {
     if (!installBox) installBox = createInstallBox();
     const statusEl = document.getElementById('ic-install-status');
-    const alreadyInstalled = localStorage.getItem(storageKeyInstalled) === '1' || window.matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
-    if (alreadyInstalled) {
-      if (statusEl) statusEl.textContent = 'Installed';
-      installBox.style.opacity = '0.6';
-      installBox.style.pointerEvents = 'none';
-      return;
-    }
-    // show "Install" CTA if prompt is available, else show "Install" anyway (fallback)
-    if (statusEl) statusEl.textContent = 'Install';
+  
+    const wasInstalled =
+      localStorage.getItem(storageKeyInstalled) === '1' ||
+      window.matchMedia('(display-mode: standalone)').matches ||
+      navigator.standalone === true;
+  
+    // Always clickable — allow reinstall / re-add to homescreen
+    installBox.style.opacity = wasInstalled ? '0.8' : '1';
     installBox.style.pointerEvents = 'auto';
+  
+    // Status text
+    if (statusEl) {
+      statusEl.textContent = wasInstalled ? 'Installed (Tap to reinstall)' : 'Install';
+    }
+  
+    // Always allow tap
     installBox.onclick = onInstallBoxClick;
   }
 
