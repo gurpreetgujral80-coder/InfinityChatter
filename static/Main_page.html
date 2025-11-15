@@ -455,7 +455,7 @@
               ]
             };
           
-            const res = await fetch('/api/contacts_add', {
+            const res = await fetch('/contacts_list', {
               method: 'POST',
               credentials: 'include',
               headers: { 'Content-Type': 'application/json' },
@@ -477,7 +477,7 @@
 
     async _pullFromServer() {
       try {
-        const contactsRes = await fetch('/api/contacts_add', { credentials: 'include' });
+        const contactsRes = await fetch('/contacts_list', { credentials: 'include' });
         if (contactsRes && contactsRes.ok) {
           const j = await contactsRes.json().catch(()=>null);
           const contacts = j && j.contacts ? j.contacts : (Array.isArray(j) ? j : []);
@@ -912,13 +912,13 @@
     document.getElementById('bulkAddBtn')?.addEventListener('click', ()=> sendSelectedToServer(uniq));
   }
 
-  // send to server /api/contacts_add
+  // send to server /contacts_list
   async function sendSelectedToServer(items){
     const resultDiv = document.getElementById('addContactsResult');
     if (!resultDiv) return;
     resultDiv.innerHTML = '<div>Saving contacts…</div>';
     try {
-      const resp = await fetch('/api/contacts_add', {
+      const resp = await fetch('/contacts_list', {
         method: 'POST',
         headers: {'Content-Type':'application/json'},
         body: JSON.stringify({contacts: items})
@@ -1563,7 +1563,7 @@
             setLocalContactName(contactId, name);
             updateCardDisplayedName(contactId, name);
             try {
-              const resp = await fetch('/api/contacts_add', {
+              const resp = await fetch('/contacts_list', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ contacts: [{ contact: contactId, name }] }),
