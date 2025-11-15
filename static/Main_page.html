@@ -139,16 +139,6 @@
     <div class="nav-item" id="nav-settings" data-id="settings" data-path="/settings"><div>Settings</div></div>
   </div>
 <script>
-/* OfflineDB v3 — Full contacts sync + per-contact messages + immediate initial sync
-   - Authoritative local store: IndexedDB
-   - Contacts: FULL sync (server replaces local, preserves local 'self')
-   - Messages: stored per-message; index 'by_contact' for per-chat queries
-   - Statuses: stored and synced
-   - Outbox: queued offline actions
-   - Meta: last_server_msg_ts, app_version, etc.
-   - Exposes: window.OfflineDB, window.startOfflineDB
-*/
-
 (function () {
   const DB_NAME = 'infinity_offline_v3';
   const DB_VERSION = 2;
@@ -253,6 +243,12 @@
       };
     },
 
+    async init() {
+      await openDB();
+      window.addEventListener('online', () => {
+        this.syncNow().catch(()=>{});
+      });
+    },
     _shouldSkipContact(row) {
       if (!row || !row.contact) return true;
       const cid = String(row.contact).toLowerCase();
