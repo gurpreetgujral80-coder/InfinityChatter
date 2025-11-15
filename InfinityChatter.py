@@ -7549,6 +7549,94 @@ def route_delete_message():
     if not ok: return err, 400
     touch_user_presence(username); return jsonify({"status":"ok"})
 
+# ---------- API: Check phone(s) for registered users ----------
+@app.route('/api/check_phone', methods=['POST'])
+def api_check_phone():
+    """
+    Accepts JSON: { "phone": "+911234567890" }
+    Returns: { "registered": true, "username": "...", "display_name": "..." }
+             or  { "registered": false }
+    """
+    data = request.get_json(silent=True) or {}
+    phone = (data.get('phone') or '').strip()
+    if not phone:
+        return jsonify({"error": "missing_phone"}), 400
+
+    # normalize phone using helper already in file
+    norm = normalize_phone(phone)
+    if not norm:
+        return jsonify({"registered": False}), 200
+
+    try:
+        # find_users_by_phones returns a map phone->username
+        found = find_users_by_phones([norm]) or {}
+        if norm in found:
+            username = found[norm]
+            # try to read nicer display name from users table
+            try:
+                conn = db_conn(); cur = conn.cursor()
+                cur.execute("SELECT name FROM users WHERE name = ? LIMIT 1", (username,))
+                r = cur.fetchone(); conn.close()
+                display = r[0] if r and r[0] else username
+            except Exception:
+                display = username
+            return jsonify({"registered": True, "username": username, "display_name": display})
+        else:
+            return jsonify({"registered": False})
+    except Exception as e:
+        current_app.logger.exception("check_phone failed: %s", e)
+        return jsonify({"error": "server_error"}), 500
+
+@app.route('/api/check_phones', methods=['POST'])
+def api_check_phones():
+    """
+    Accepts JSON: { "phones": ["+911234567890", "9876543210", ...] }
+    Returns: { "results": { "<norm_phone>": {"registered":true,"username":"...","display_name":"..."} , ... } }
+    """
+    data = request.get_json(silent=True) or {}
+    phones = data.get('phones') or []
+    if not isinstance(phones, list) or not phones:
+        return jsonify({"error": "missing_phones"}), 400
+
+    # normalize and dedupe
+    norms = []
+    for p in phones:
+        n = normalize_phone(str(p))
+        if n and n not in norms:
+            norms.append(n)
+
+    if not norms:
+        return jsonify({"results": {}})
+
+    try:
+        found_map = find_users_by_phones(norms) or {}
+        results = {}
+        # load display names in bulk (if needed)
+        conn = db_conn(); cur = conn.cursor()
+        cur.execute("SELECT name FROM users WHERE name IN ({})".format(",".join("?"*len(found_map.values()))), tuple(found_map.values())) if found_map else None
+        # build simple mapping for display; fallback to username
+        displays = {}
+        if found_map:
+            try:
+                cur.execute("SELECT name FROM users WHERE name IN ({})".format(",".join("?"*len(found_map.values()))), tuple(found_map.values()))
+                rows = cur.fetchall()
+                for r in rows:
+                    displays[r[0]] = r[0]
+            except Exception:
+                pass
+        conn.close()
+
+        for n in norms:
+            if n in found_map:
+                u = found_map[n]
+                results[n] = {"registered": True, "username": u, "display_name": displays.get(u, u)}
+            else:
+                results[n] = {"registered": False}
+        return jsonify({"results": results})
+    except Exception as e:
+        current_app.logger.exception("check_phones failed: %s", e)
+        return jsonify({"error": "server_error"}), 500
+
 @app.route("/react_message", methods=["POST"])
 def route_react_message():
     username = flask_session.get('username');
