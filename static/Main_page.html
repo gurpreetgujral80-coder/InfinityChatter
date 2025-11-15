@@ -1563,21 +1563,6 @@
     localStorage.setItem("__self_chat_token", selfToken);
   }
 
-  // ---- Build self chat contact ----
-  const selfContact = {
-    name: `${username} (You)`,
-    contact: "self",
-    last_text: "Message Yourself",
-    last_ts: Math.floor(Date.now() / 1000),
-    avatar_url: profile.avatar_url || null
-  };
-
-  // ---- Merge contacts + self ----
-  let merged = Array.isArray(localContacts) ? [...localContacts] : [];
-  if (!merged.some(c => (c.contact || "").toLowerCase() === "self")) {
-    merged.push(selfContact);
-  }
-
   // ---- Save merged back ----
   try { localStorage.setItem("infinity_contacts", JSON.stringify(merged)); }
   catch {}
