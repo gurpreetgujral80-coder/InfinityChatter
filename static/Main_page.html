@@ -455,7 +455,7 @@
               ]
             };
           
-            const res = await fetch('/contacts_list', {
+            const res = await fetch('/api/contacts_add', {
               method: 'POST',
               credentials: 'include',
               headers: { 'Content-Type': 'application/json' },
@@ -918,7 +918,7 @@
     if (!resultDiv) return;
     resultDiv.innerHTML = '<div>Saving contacts…</div>';
     try {
-      const resp = await fetch('/contacts_list', {
+      const resp = await fetch('/api/contacts_add', {
         method: 'POST',
         headers: {'Content-Type':'application/json'},
         body: JSON.stringify({contacts: items})
@@ -1563,7 +1563,7 @@
             setLocalContactName(contactId, name);
             updateCardDisplayedName(contactId, name);
             try {
-              const resp = await fetch('/contacts_list', {
+              const resp = await fetch('//api/contacts_add', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ contacts: [{ contact: contactId, name }] }),
