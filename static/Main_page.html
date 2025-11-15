@@ -153,31 +153,31 @@
 
   // --- tiny promisified IndexedDB wrapper ---
   function openDB(){
-    return new Promise((resolve, reject) => {
-      const req = indexedDB.open(DB_NAME, DB_VERSION);
-      req.onupgradeneeded = (ev) => {
-        const db = req.result;
-        if (!db.objectStoreNames.contains(STORE_MESSAGES)) {
-          const s = db.createObjectStore(STORE_MESSAGES, { keyPath: 'id' });
-          s.createIndex('created_at', 'created_at');
-        }
-        if (!db.objectStoreNames.contains(STORE_CONTACTS)) {
-          db.createObjectStore(STORE_CONTACTS, { keyPath: 'contact' });
-        }
-        if (!db.objectStoreNames.contains(STORE_STATUSES)) {
-          db.createObjectStore(STORE_STATUSES, { keyPath: 'id' });
-          db.createIndex('createdAt', 'createdAt');
-        }
-        if (!db.objectStoreNames.contains(STORE_OUTBOX)) {
-          db.createObjectStore(STORE_OUTBOX, { keyPath: 'oid', autoIncrement: true });
-        }
-        if (!db.objectStoreNames.contains(STORE_META)) {
-          db.createObjectStore(STORE_META, { keyPath: 'key' });
-        }
-      };
-      req.onsuccess = ()=> resolve(req.result);
-      req.onerror = ()=> reject(req.error);
-    });
+      return new Promise((resolve, reject) => {
+          const req = indexedDB.open(DB_NAME, DB_VERSION);
+          req.onupgradeneeded = (ev) => {
+              const db = req.result;
+              if (!db.objectStoreNames.contains(STORE_MESSAGES)) {
+                  const s = db.createObjectStore(STORE_MESSAGES, { keyPath: 'id' });
+                  s.createIndex('created_at', 'created_at');
+              }
+              if (!db.objectStoreNames.contains(STORE_CONTACTS)) {
+                  db.createObjectStore(STORE_CONTACTS, { keyPath: 'contact' });
+              }
+              if (!db.objectStoreNames.contains(STORE_STATUSES)) {
+                  db.createObjectStore(STORE_STATUSES, { keyPath: 'id' });
+                  db.createIndex('createdAt', 'createdAt');
+              }
+              if (!db.objectStoreNames.contains(STORE_OUTBOX)) {
+                  db.createObjectStore(STORE_OUTBOX, { keyPath: 'oid', autoIncrement: true });
+              }
+              if (!db.objectStoreNames.contains(STORE_META)) {
+                  db.createObjectStore(STORE_META, { keyPath: 'key' });
+              }
+          };
+          req.onsuccess = ()=> resolve(req.result);
+          req.onerror = ()=> reject(req.error);
+      });
   }
 
   async function withStore(storeName, mode, fn){
@@ -299,7 +299,10 @@
       if (!entry.contact) entry.contact = entry.contact_name || entry.phone || ('c-'+Date.now());
       if (!entry.added_at) entry.added_at = Date.now();
       // skip saving self
-      if (this._shouldSkipContact(entry)) return entry;
+      if (this._shouldSkipContact(entry)) {
+          return entry;
+      }
+
       await withStore(STORE_CONTACTS, 'readwrite', s => s.put(entry));
       await this.enqueueOutbox({ type: 'contact', payload: entry });
       return entry;
