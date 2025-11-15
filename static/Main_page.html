@@ -1142,7 +1142,7 @@
     setTimeout(()=> document.addEventListener('click', onDoc), 10);
   }
 
-  // --- load contacts from server and render (FINAL WORKING VERSION) ---
+  // --- load contacts from server and render (FIXED VERSION) ---
   async function loadContacts() {
     const container = document.getElementById('contactsContainer');
     if (container) container.innerHTML = '';
@@ -1168,6 +1168,13 @@
       const data = await resp.json();
       let serverContacts = data.contacts || [];
   
+      console.log("📌 Server contacts:", serverContacts);
+  
+      // 4️⃣ Load client contacts from IndexedDB (not localStorage)
+      const localContacts = await OfflineDB.listContacts();
+  
+      console.log("📌 Local contacts:", localContacts);
+  
       // 5️⃣ Merge local + server (server wins)
       const merged = [...localContacts];
   
@@ -1177,8 +1184,19 @@
         else merged.push(sc);
       });
   
-      // 8️⃣ Make available globally for debug + fallback renderer
+      // ❗ 6️⃣ NO SELF CHAT INSERT HERE — removed permanently
+  
+      console.log("📌 Final merged contacts:", merged);
+  
+      // 7️⃣ Update IndexedDB (server overrides local)
+      for (const c of merged) {
+        await OfflineDB.saveContactLocal(c);
+      }
+  
+      // 8️⃣ Make available globally
       window.FINAL_CONTACTS = merged;
+  
+      console.log("📌 FINAL_CONTACTS set:", window.FINAL_CONTACTS);
   
       // 9️⃣ Render UI
       renderContacts(merged);
