@@ -1407,7 +1407,7 @@ USER_SID = {}      # username -> sid
 CALL_INVITES = {}  # call_id -> info
 TYPING_USERS = set()
 
-def touch_user_presence(username):
+touch_user_presence(username, online=None)
     if not username: return
     LAST_SEEN[username] = int(time.time())
 
@@ -3672,7 +3672,7 @@ window.sendMessage = sendMessage;
             console.error('socket new_message handler error', e);
           }
         });
-        const container = document.getElementById('.chat-wrap')
+        const container = document.getElementById('chat-wrap')
         if (!container) {
           console.warn('Messages container not found — aborting append.');
           return; // avoid ReferenceError and stop further code that assumes container exists
@@ -7231,7 +7231,7 @@ def chat():
     is_member = is_owner or is_partner
 
     # --- Step 6: Mark user presence ---
-    touch_user_presence(username)
+    touch_user_presence(username, online=None)
 
     # --- Step 7: Read peer token (for chat or self) ---
     peer_token = request.args.get("t") or request.args.get("peer")
@@ -7357,7 +7357,7 @@ def send_composite_message():
 
         # optional: update user activity timestamp
         try:
-            touch_user_presence(username)
+            touch_user_presence(username, online=None)
         except Exception:
             pass
 
@@ -7537,7 +7537,7 @@ def route_edit_message():
     msg_id = body.get("id"); text = body.get("text","").strip()
     ok, err = edit_message_db(msg_id, text, username)
     if not ok: return err, 400
-    touch_user_presence(username); return jsonify({"status":"ok"})
+    touch_user_presence(username, online=None); return jsonify({"status":"ok"})
 
 @app.route("/delete_message", methods=["POST"])
 def route_delete_message():
@@ -7547,7 +7547,7 @@ def route_delete_message():
     msg_id = body.get("id")
     ok, err = delete_message_db(msg_id, username)
     if not ok: return err, 400
-    touch_user_presence(username); return jsonify({"status":"ok"})
+    touch_user_presence(username, online=None); return jsonify({"status":"ok"})
 
 # ---------- API: Check phone(s) for registered users ----------
 @app.route('/api/check_phone', methods=['POST'])
@@ -7645,7 +7645,7 @@ def route_react_message():
     msg_id = body.get("id"); emoji = body.get("emoji","❤️")
     ok, err = react_message_db(msg_id, username, emoji)
     if not ok: return err, 400
-    touch_user_presence(username); return jsonify({"status":"ok"})
+    touch_user_presence(username, online=None); return jsonify({"status":"ok"})
 
 @app.route("/partner_info")
 def partner_info():
@@ -7971,7 +7971,10 @@ def poll_alias():
 
     msgs = fetch_messages(since)
     return jsonify(msgs)
-    
+
+@app.route('/api/app_version')
+def api_app_version():
+    return {"version": "1.0"}
 # ----- run -----
 if __name__ == "__main__":
     print("DB:", DB_PATH)
