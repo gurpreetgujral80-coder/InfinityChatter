@@ -213,6 +213,28 @@
     return withStore(STORE_META, 'readwrite', store => store.put({ key, value }));
   }
 
+  // ---- remove stray self-* variants left by older code ----
+  async function _cleanupSelfVariants() {
+    try {
+      await withStore(STORE_CONTACTS, 'readwrite', store => new Promise((res) => {
+        const req = store.openCursor();
+        req.onsuccess = (e) => {
+          const cur = e.target.result;
+          if (!cur) return res(true);
+          const key = String(cur.primaryKey || cur.value.contact || '').toLowerCase();
+          // delete keys like 'self_*' or 'selfanything' but KEEP exact 'self'
+          if (key.startsWith('self') && key !== 'self') {
+            try { store.delete(cur.primaryKey); } catch (e) {}
+          }
+          cur.continue();
+        };
+        req.onerror = () => res(true);
+      }));
+    } catch (e) {
+      // ignore; cleanup is best-effort
+    }
+  }
+
   // --------- OfflineDB object ----------
   const OfflineDB = {
     _syncTimer: null,
@@ -249,6 +271,7 @@
         this.syncNow().catch(()=>{});
       });
     },
+
     _shouldSkipContact(row) {
       if (!row || !row.contact) return true;
       const cid = String(row.contact).toLowerCase();
@@ -273,12 +296,15 @@
         };
         req.onerror = () => res([]);
       }));
-      // ensure self presence at end (we will guarantee one self)
+      // remove any stored self variants (we will provide one canonical self)
+      const nonSelf = arr.filter(c => {
+        const cid = String((c || {}).contact || '').toLowerCase();
+        return !cid.startsWith('self');
+      });
       const self = this._ensureSelfEntryObject();
-      const filtered = arr.filter(c => String((c || {}).contact || '').toLowerCase() !== 'self');
-      filtered.unshift(self);
-      CONTACTS_CACHE = filtered;
-      return filtered.slice();
+      const merged = [self, ...nonSelf];
+      CONTACTS_CACHE = merged;
+      return merged.slice();
     },
 
     async saveContactLocal(contact) {
@@ -296,20 +322,21 @@
     async replaceContactsFull(serverContacts = []) {
       // serverContacts: array from server; each item must have .contact
       const self = this._ensureSelfEntryObject();
-      // first delete all non-self contacts then insert server ones
+      // first delete all non-self contacts and stray self variants then insert server ones
       await withStore(STORE_CONTACTS, 'readwrite', store => {
         return new Promise((resolve) => {
           const req = store.openCursor();
           req.onsuccess = (e) => {
             const cur = e.target.result;
             if (!cur) return resolve(true);
-            const key = cur.primaryKey;
-            if (String(key).toLowerCase() === 'self') {
-              cur.continue();
-            } else {
-              store.delete(key);
-              cur.continue();
+            const key = String(cur.primaryKey || cur.value.contact || '').toLowerCase();
+            // delete stray self variants and non-self entries; keep exact 'self'
+            if (key.startsWith('self') && key !== 'self') {
+              try { store.delete(cur.primaryKey); } catch (ex) {}
+            } else if (!key.startsWith('self')) {
+              try { store.delete(cur.primaryKey); } catch (ex) {}
             }
+            cur.continue();
           };
           req.onerror = () => resolve(true);
         });
@@ -661,6 +688,8 @@
 
     // warm DB and start periodic syncs
     await OfflineDB.init();
+    // cleanup stray self variants before we list/publish contacts
+    await _cleanupSelfVariants();
     OfflineDB._startPeriodicSync();
 
     // initial load of local contacts & messages (fast)
@@ -1593,7 +1622,7 @@
   window.__infinity.closeContactMenus = closeAllContactMenus;
   
   // initial contact load
-  startOfflineDB();
+  await startOfflineDB();
   loadContacts();
 })();
 
