@@ -1408,8 +1408,8 @@ CALL_INVITES = {}  # call_id -> info
 TYPING_USERS = set()
 
 touch_user_presence(username, online=None)
-    if not username: return
-    LAST_SEEN[username] = int(time.time())
+if not username: return
+LAST_SEEN[username] = int(time.time())
 
 # ---------- Avatar generation (WhatsApp-like initials SVG) ----------
 def initials_and_color(name):
