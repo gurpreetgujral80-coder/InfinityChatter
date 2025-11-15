@@ -151,17 +151,14 @@
   const SYNC_INTERVAL_MS = 30 * 1000;
   const BACKOFF_BASE = 2000;
 
-  // small in-memory caches
-  let CONTACTS_CACHE = null; // array
-  let MESSAGES_INDEX_CACHE = {}; // contact -> last message ts (ms)
+  let CONTACTS_CACHE = null;
+  let MESSAGES_INDEX_CACHE = {};
 
-  // --------- IndexedDB helpers ----------
   function openDB() {
     return new Promise((resolve, reject) => {
       const req = indexedDB.open(DB_NAME, DB_VERSION);
       req.onupgradeneeded = (ev) => {
         const db = req.result;
-        // messages: keyPath id, index by contact and created_at
         if (!db.objectStoreNames.contains(STORE_MESSAGES)) {
           const ms = db.createObjectStore(STORE_MESSAGES, { keyPath: 'id' });
           ms.createIndex('by_contact', 'contact', { unique: false });
@@ -201,7 +198,6 @@
     });
   }
 
-  // meta helpers
   async function metaGet(key) {
     return withStore(STORE_META, 'readonly', store => new Promise((res) => {
       const r = store.get(key);
@@ -213,7 +209,7 @@
     return withStore(STORE_META, 'readwrite', store => store.put({ key, value }));
   }
 
-  // ---- remove stray self-* variants left by older code ----
+  // cleanup stray 'self*' contact keys (keep exact 'self' only)
   async function _cleanupSelfVariants() {
     try {
       await withStore(STORE_CONTACTS, 'readwrite', store => new Promise((res) => {
@@ -222,34 +218,29 @@
           const cur = e.target.result;
           if (!cur) return res(true);
           const key = String(cur.primaryKey || cur.value.contact || '').toLowerCase();
-          // delete keys like 'self_*' or 'selfanything' but KEEP exact 'self'
           if (key.startsWith('self') && key !== 'self') {
-            try { store.delete(cur.primaryKey); } catch (e) {}
+            try { store.delete(cur.primaryKey); } catch (ignored) {}
           }
           cur.continue();
         };
         req.onerror = () => res(true);
       }));
     } catch (e) {
-      // ignore; cleanup is best-effort
+      // best-effort cleanup
     }
   }
 
-  // --------- OfflineDB object ----------
   const OfflineDB = {
     _syncTimer: null,
     _isSyncing: false,
     _onSyncStart: null,
     _onSyncEnd: null,
 
-    // minimal profile helpers
     _getProfileId() {
       try {
         const p = JSON.parse(localStorage.getItem('infinity_profile') || '{}');
         return p.contact || p.username || p.name || p.phone || null;
-      } catch (e) {
-        return null;
-      }
+      } catch (e) { return null; }
     },
 
     _ensureSelfEntryObject() {
@@ -267,9 +258,10 @@
 
     async init() {
       await openDB();
-      window.addEventListener('online', () => {
-        this.syncNow().catch(()=>{});
-      });
+      await _cleanupSelfVariants();
+      window.addEventListener('online', () => { this.syncNow().catch(()=>{}); });
+      // warm caches minimally
+      CONTACTS_CACHE = null;
     },
 
     _shouldSkipContact(row) {
@@ -281,9 +273,7 @@
       return false;
     },
 
-    // ---- contacts operations ----
     async listContacts() {
-      // return deduped contacts array (cached)
       if (CONTACTS_CACHE) return CONTACTS_CACHE.slice();
       const arr = await withStore(STORE_CONTACTS, 'readonly', store => new Promise((res) => {
         const out = [];
@@ -296,13 +286,14 @@
         };
         req.onerror = () => res([]);
       }));
-      // remove any stored self variants (we will provide one canonical self)
+      // remove stray self variants, keep only exact 'self'
       const nonSelf = arr.filter(c => {
         const cid = String((c || {}).contact || '').toLowerCase();
-        return !cid.startsWith('self');
+        return cid !== 'self';
       });
+
       const self = this._ensureSelfEntryObject();
-      const merged = [self, ...nonSelf];
+      const merged = [self].concat(nonSelf);
       CONTACTS_CACHE = merged;
       return merged.slice();
     },
@@ -312,39 +303,34 @@
       if (!entry.contact) entry.contact = entry.contact_name || entry.phone || ('c-' + Date.now());
       if (!entry.added_at) entry.added_at = Date.now();
       if (this._shouldSkipContact(entry)) return entry;
-      await withStore(STORE_CONTACTS, 'readwrite', store => store.put(entry));
-      CONTACTS_CACHE = null; // invalidate cache
+      await withStore(STORE_CONTACTS, 'readwrite', s => s.put(entry));
+      CONTACTS_CACHE = null;
       await this.enqueueOutbox({ type: 'contact', payload: entry });
       return entry;
     },
 
-    // clear & replace contacts with server list (preserve local self)
+    // replace local contacts with server list, but preserve single canonical 'self'
     async replaceContactsFull(serverContacts = []) {
-      // serverContacts: array from server; each item must have .contact
       const self = this._ensureSelfEntryObject();
-      // first delete all non-self contacts and stray self variants then insert server ones
-      await withStore(STORE_CONTACTS, 'readwrite', store => {
-        return new Promise((resolve) => {
-          const req = store.openCursor();
-          req.onsuccess = (e) => {
-            const cur = e.target.result;
-            if (!cur) return resolve(true);
-            const key = String(cur.primaryKey || cur.value.contact || '').toLowerCase();
-            // delete stray self variants and non-self entries; keep exact 'self'
-            if (key.startsWith('self') && key !== 'self') {
-              try { store.delete(cur.primaryKey); } catch (ex) {}
-            } else if (!key.startsWith('self')) {
-              try { store.delete(cur.primaryKey); } catch (ex) {}
-            }
+      await withStore(STORE_CONTACTS, 'readwrite', store => new Promise((resolve) => {
+        const req = store.openCursor();
+        req.onsuccess = (e) => {
+          const cur = e.target.result;
+          if (!cur) return resolve(true);
+          const key = String(cur.primaryKey || cur.value.contact || '').toLowerCase();
+          if (key === 'self') {
             cur.continue();
-          };
-          req.onerror = () => resolve(true);
-        });
-      });
-      // put server contacts
+          } else {
+            try { store.delete(cur.primaryKey); } catch (ignored) {}
+            cur.continue();
+          }
+        };
+        req.onerror = () => resolve(true);
+      }));
+
       for (const sc of serverContacts) {
         const row = {
-          contact: sc.contact || sc.contact_name || ('c-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6)),
+          contact: sc.contact || sc.contact_name || ('c-' + Date.now() + '-' + Math.random().toString(36).slice(2,6)),
           name: sc.contact_name || sc.name || '',
           phone: sc.phone || '',
           avatar_url: sc.avatar || sc.avatar_url || '',
@@ -353,44 +339,34 @@
         if (String(row.contact).toLowerCase() === 'self') continue;
         await withStore(STORE_CONTACTS, 'readwrite', s => s.put(row));
       }
-      // ensure self present
+
       await withStore(STORE_CONTACTS, 'readwrite', s => s.put(self));
       CONTACTS_CACHE = null;
     },
 
-    // ---- messages operations ----
-    // save message local & optionally queue
     async saveMessageLocal(msg) {
       const entry = Object.assign({}, msg);
       if (!entry.id) entry.id = 'local-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8);
       if (!entry.contact) entry.contact = entry.to || entry.peer || 'unknown';
       if (!entry.created_at) entry.created_at = Date.now();
       await withStore(STORE_MESSAGES, 'readwrite', s => s.put(entry));
-      // update messages index cache
       const last = MESSAGES_INDEX_CACHE[entry.contact] || 0;
       if ((entry.created_at || 0) > last) MESSAGES_INDEX_CACHE[entry.contact] = entry.created_at;
-      // if it's local (not server id) enqueue to outbox
-      if (!this._looksServerMessage(entry)) {
-        await this.enqueueOutbox({ type: 'message', payload: entry });
-      }
+      if (!this._looksServerMessage(entry)) await this.enqueueOutbox({ type: 'message', payload: entry });
       return entry;
     },
 
-    // get messages for a contact (newest-first)
     async getMessagesForContact(contactId, { since = 0, limit = 1000 } = {}) {
       return withStore(STORE_MESSAGES, 'readonly', store => new Promise((res) => {
         const out = [];
         const idx = store.index('created_at');
-        // iterate newest-first by using a reverse cursor over created_at index
         const req = idx.openCursor(null, 'prev');
         req.onsuccess = (e) => {
           const cur = e.target.result;
           if (!cur) return res(out);
           const v = cur.value;
           const c = v.contact || v.to || v.peer;
-          if (String(c) === String(contactId) && (v.created_at || 0) >= since) {
-            out.push(v);
-          }
+          if (String(c) === String(contactId) && (v.created_at || 0) >= since) out.push(v);
           if (out.length >= limit) return res(out);
           cur.continue();
         };
@@ -398,7 +374,6 @@
       }));
     },
 
-    // ---- statuses ops ----
     async saveStatusLocal(status) {
       const entry = Object.assign({}, status);
       if (!entry.id) entry.id = 's-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8);
@@ -408,6 +383,7 @@
       await this.enqueueOutbox({ type: 'status', payload: entry });
       return entry;
     },
+
     async listStatuses() {
       return withStore(STORE_STATUSES, 'readonly', store => new Promise((res) => {
         const out = [];
@@ -423,10 +399,8 @@
       }));
     },
 
-    // ---- outbox ops ----
     async enqueueOutbox(op) {
       await withStore(STORE_OUTBOX, 'readwrite', s => s.add({ op, created_at: Date.now() }));
-      // try draining immediately
       this.syncNow().catch(()=>{});
     },
 
@@ -452,7 +426,7 @@
               text: op.payload.text || '',
               attachments: op.payload.attachments || [],
               contact: op.payload.contact || op.payload.to || op.payload.peer,
-              sender: op.payload.sender || (localStorage.getItem('infinity_profile') ? JSON.parse(localStorage.getItem('infinity_profile')).name : undefined),
+              sender: op.payload.sender || (JSON.parse(localStorage.getItem('infinity_profile') || '{}').name || undefined),
               created_at: op.payload.created_at || Date.now()
             };
             const res = await fetch('/send_message', {
@@ -489,22 +463,18 @@
             await withStore(STORE_OUTBOX, 'readwrite', s => s.delete(key));
           }
         } catch (err) {
-          // stop and let caller retry later
           throw err;
         }
       }
       return true;
     },
 
-    // ---- pull from server (contacts full-replace, messages incremental using last_server_msg_ts) ----
     async _pullFromServer() {
-      // 1) contacts - full replace
       try {
         const contactsRes = await fetch('/api/contacts', { credentials: 'include' });
         if (contactsRes && contactsRes.ok) {
           const j = await contactsRes.json().catch(()=>null);
           const contacts = j && j.contacts ? j.contacts : (Array.isArray(j) ? j : []);
-          // normalize contacts and replace local store
           const normalized = contacts.map(c => ({
             contact: c.contact || c.contact_name || (c.phone ? 'phone:'+c.phone : ('c-'+Date.now()+'-'+Math.random().toString(36).slice(2,6))),
             name: c.contact_name || c.name || '',
@@ -514,11 +484,8 @@
           }));
           await this.replaceContactsFull(normalized);
         }
-      } catch (e) {
-        // ignore and continue (server may be unavailable)
-      }
+      } catch (e) { /* ignore */ }
 
-      // 2) messages: incremental pull since last_server_msg_ts (ms)
       try {
         let lastMsgTs = await metaGet('last_server_msg_ts') || 0;
         const messagesRes = await fetch('/api/messages?since=' + encodeURIComponent(lastMsgTs), { credentials: 'include' });
@@ -530,22 +497,17 @@
             const mm = Object.assign({}, m);
             if (!mm.id) mm.id = 'srv-' + (mm.created_at || Date.now()) + '-' + Math.random().toString(36).slice(2,6);
             mm.created_at = mm.created_at || mm.createdAt || Date.now();
-            // ensure contact field
             mm.contact = mm.contact || mm.to || mm.peer || mm.sender || 'unknown';
             await withStore(STORE_MESSAGES, 'readwrite', s => s.put(mm));
             if ((mm.created_at || 0) > maxTs) maxTs = mm.created_at;
-            // update in-memory index
             const c = mm.contact;
             const prev = MESSAGES_INDEX_CACHE[c] || 0;
             if ((mm.created_at || 0) > prev) MESSAGES_INDEX_CACHE[c] = mm.created_at;
           }
           if (maxTs) await metaSet('last_server_msg_ts', maxTs);
         }
-      } catch (e) {
-        // ignore
-      }
+      } catch (e) { /* ignore */ }
 
-      // 3) statuses
       try {
         const statusesRes = await fetch('/api/statuses', { credentials: 'include' });
         if (statusesRes && statusesRes.ok) {
@@ -558,20 +520,16 @@
             await withStore(STORE_STATUSES, 'readwrite', store => store.put(ss));
           }
         }
-      } catch (e) {
-        // ignore
-      }
+      } catch (e) { /* ignore */ }
 
       return true;
     },
 
-    // main sync entrypoint: drain outbox then pull server
     async syncNow() {
       if (this._isSyncing) return;
       this._isSyncing = true;
       if (typeof this._onSyncStart === 'function') this._onSyncStart();
       try {
-        // drain outbox with retries
         let attempt = 0;
         while (true) {
           try {
@@ -583,16 +541,11 @@
             await new Promise(r => setTimeout(r, BACKOFF_BASE * attempt));
           }
         }
-        // pull server data
         await this._pullFromServer();
-        // refresh caches and optionally notify UI when changed
         CONTACTS_CACHE = null;
-        // if renderContacts exists, call it with current contacts
         try {
           if (typeof window.renderContacts === 'function') {
             const all = await this.listContacts();
-            // call render only if changed relative to last cache
-            // renderContacts should handle clearing container to avoid dupes
             window.renderContacts(all);
           }
         } catch (e) {}
@@ -618,7 +571,6 @@
       return String(m.id).match(/^[0-9]+$/);
     },
 
-    // ---- backups ----
     async exportBackup(filename = null) {
       const contacts = await this.listContacts();
       const statuses = await this.listStatuses();
@@ -669,43 +621,25 @@
       return true;
     },
 
-    // hooks
     onSyncStart(fn) { this._onSyncStart = fn; },
     onSyncEnd(fn) { this._onSyncEnd = fn; }
   };
 
-  // expose
   window.OfflineDB = OfflineDB;
 
-  // -------- start helper (idempotent) ----------
   async function startOfflineDB(options = { checkAppVersion: true }) {
     if (window._offlineDBStarted) return;
     window._offlineDBStarted = true;
 
-    // ensure profile exists before starting heavy sync; if not, still init DB
     const profile = JSON.parse(localStorage.getItem('infinity_profile') || '{}');
     const username = profile.username || profile.name || null;
 
-    // warm DB and start periodic syncs
     await OfflineDB.init();
-    // cleanup stray self variants before we list/publish contacts
-    await _cleanupSelfVariants();
     OfflineDB._startPeriodicSync();
 
-    // initial load of local contacts & messages (fast)
-    try {
-      // ensure at least one self and load cache
-      await OfflineDB.listContacts();
-    } catch (e) {}
+    try { await OfflineDB.listContacts(); } catch (e) {}
+    try { await OfflineDB.syncNow(); } catch (e) {}
 
-    // immediate sync (drain outbox -> pull)
-    try {
-      await OfflineDB.syncNow();
-    } catch (e) {
-      // ignore transient sync failures
-    }
-
-    // optional app_version check to detect redeploys and refresh UI if needed
     if (options && options.checkAppVersion) {
       try {
         const res = await fetch('/api/app_version', { credentials: 'include' });
@@ -715,7 +649,6 @@
           const localVer = await metaGet('app_version');
           if (serverVer && serverVer !== localVer) {
             await metaSet('app_version', serverVer);
-            // reload to pick up new static assets after deploy
             try { location.reload(true); } catch (e) { location.reload(); }
           } else {
             if (serverVer) await metaSet('app_version', serverVer);
@@ -726,7 +659,6 @@
   }
 
   window.startOfflineDB = startOfflineDB;
-
 })();
 </script>
 <script>
