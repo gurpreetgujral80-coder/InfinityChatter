@@ -260,6 +260,114 @@ def api_messages():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+# ---------- Block / Unblock endpoints ----------
+import sqlite3, time
+from flask import request, jsonify, current_app, session as flask_session
+
+def ensure_blocked_table():
+    try:
+        conn = db_conn()
+        cur = conn.cursor()
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS blocked_contacts (
+              owner TEXT NOT NULL,
+              contact TEXT NOT NULL,
+              blocked_at INTEGER NOT NULL,
+              PRIMARY KEY (owner, contact)
+            )
+        """)
+        conn.commit()
+        conn.close()
+    except Exception:
+        try:
+            conn = sqlite3.connect(DB_PATH)
+            cur = conn.cursor()
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS blocked_contacts (
+                  owner TEXT NOT NULL,
+                  contact TEXT NOT NULL,
+                  blocked_at INTEGER NOT NULL,
+                  PRIMARY KEY (owner, contact)
+                )
+            """)
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            current_app.logger.exception("ensure_blocked_table failed: %s", e)
+
+# ensure the table at import time
+ensure_blocked_table()
+
+@app.route('/api/block_contact', methods=['POST'])
+def api_block_contact():
+    """
+    Body: { "contact": "...", "owner": "optionalOwner" }
+    Response: { "status": "ok" }
+    """
+    data = request.get_json(silent=True) or {}
+    contact = (data.get('contact') or '').strip()
+    if not contact:
+        return jsonify({"error": "missing_contact"}), 400
+    owner = data.get('owner') or flask_session.get('username') or None
+    if not owner:
+        return jsonify({"error": "not_logged_in"}), 401
+
+    try:
+        conn = db_conn()
+        cur = conn.cursor()
+        now = int(time.time())
+        cur.execute("INSERT OR REPLACE INTO blocked_contacts (owner, contact, blocked_at) VALUES (?,?,?)",
+                    (owner, contact, now))
+        conn.commit()
+        conn.close()
+        return jsonify({"status": "ok"})
+    except Exception as e:
+        current_app.logger.exception("api_block_contact failed: %s", e)
+        return jsonify({"error": "server_error"}), 500
+
+@app.route('/api/unblock_contact', methods=['POST'])
+def api_unblock_contact():
+    """
+    Body: { "contact": "...", "owner": "optionalOwner" }
+    Response: { "status": "ok" }
+    """
+    data = request.get_json(silent=True) or {}
+    contact = (data.get('contact') or '').strip()
+    if not contact:
+        return jsonify({"error": "missing_contact"}), 400
+    owner = data.get('owner') or flask_session.get('username') or None
+    if not owner:
+        return jsonify({"error": "not_logged_in"}), 401
+
+    try:
+        conn = db_conn()
+        cur = conn.cursor()
+        cur.execute("DELETE FROM blocked_contacts WHERE owner = ? AND contact = ?", (owner, contact))
+        conn.commit()
+        conn.close()
+        return jsonify({"status": "ok"})
+    except Exception as e:
+        current_app.logger.exception("api_unblock_contact failed: %s", e)
+        return jsonify({"error": "server_error"}), 500
+
+
+@app.route('/api/blocked_list', methods=['GET'])
+def api_blocked_list():
+    owner = flask_session.get('username') or request.args.get('username') or None
+    if not owner:
+        return jsonify({"blocked": []})
+    try:
+        conn = db_conn()
+        cur = conn.cursor()
+        cur.execute("SELECT contact, blocked_at FROM blocked_contacts WHERE owner = ? ORDER BY blocked_at DESC", (owner,))
+        rows = cur.fetchall()
+        conn.close()
+        blocked = [{"contact": r[0], "blocked_at": int(r[1])} for r in rows]
+        return jsonify({"blocked": blocked})
+    except Exception as e:
+        current_app.logger.exception("api_blocked_list failed: %s", e)
+        return jsonify({"blocked": []})
+
 @app.route('/static/sw.js')
 def serve_sw():
     try:
