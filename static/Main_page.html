@@ -967,75 +967,171 @@
     document.querySelectorAll('.contact-menu-btn').forEach(b => b.setAttribute('aria-expanded','false'));
   }
 
-  // create popover in body and position it to avoid clipping
+  const LS_BLOCK_KEY = "infinity_blocked";
+  
+  async function loadBlockedFromServer() {
+    try {
+      const profile = JSON.parse(localStorage.getItem("infinity_profile") || "{}");
+      const username = profile.username || profile.name;
+      const r = await fetch("/api/blocked_list?owner=" + encodeURIComponent(username), {
+        credentials: "include"
+      });
+      const j = await r.json();
+      localStorage.setItem(LS_BLOCK_KEY, JSON.stringify(j.blocked || []));
+      return j.blocked || [];
+    } catch (e) {
+      return JSON.parse(localStorage.getItem(LS_BLOCK_KEY) || "[]");
+    }
+  }
+  
+  function loadBlocked() {
+    return JSON.parse(localStorage.getItem(LS_BLOCK_KEY) || "[]");
+  }
+  function saveBlocked(arr) {
+    localStorage.setItem(LS_BLOCK_KEY, JSON.stringify(arr));
+  }
+  
+  async function blockServer(contact) {
+    const profile = JSON.parse(localStorage.getItem("infinity_profile") || "{}");
+    const owner = profile.username || profile.name;
+    await fetch("/api/block_contact", {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ owner, contact })
+    });
+  }
+  
+  async function unblockServer(contact) {
+    const profile = JSON.parse(localStorage.getItem("infinity_profile") || "{}");
+    const owner = profile.username || profile.name;
+    await fetch("/api/unblock_contact", {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ owner, contact })
+    });
+  }
+  
+  /* Delete local messages but keep contact */
+  function clearLocalMessages(contactId) {
+    const req = indexedDB.open("infinity_offline_v3", 2);
+    req.onsuccess = () => {
+      const db = req.result;
+      const tx = db.transaction("messages", "readwrite");
+      const store = tx.objectStore("messages");
+      const cursorReq = store.openCursor();
+      cursorReq.onsuccess = (e) => {
+        const cur = e.target.result;
+        if (!cur) return;
+        const v = cur.value;
+        if (v.contact === contactId || v.to === contactId || v.peer === contactId) {
+          store.delete(cur.primaryKey);
+        }
+        cur.continue();
+      };
+    };
+  }
+  
+  /* =====================================================
+     CONTACT POPOVER
+     ===================================================== */
   function toggleContactMenu(triggerBtn, card, item) {
-    // close existing for same contact
-    const existing = document.querySelector('.contact-popover[data-for="' + (item.contact||'') + '"]');
-    if (existing) { existing.classList.remove('show'); setTimeout(()=> existing.remove(), 160); return; }
-
-    closeAllContactMenus();
-
-    const menu = document.createElement('div');
-    menu.className = 'contact-popover';
-    menu.setAttribute('data-for', item.contact || '');
+    const contactId = item.contact || item.phone || item.name;
+  
+    const old = document.querySelector(".contact-popover");
+    if (old) old.remove();
+  
+    const menu = document.createElement("div");
+    menu.className = "contact-popover";
     menu.innerHTML = `
       <button data-action="open">Open Chat</button>
       <button data-action="block">Block</button>
       <button data-action="delete" class="danger">Delete Chat</button>
     `;
     document.body.appendChild(menu);
-
-    // position it using trigger bounding rect (keep within viewport)
+  
+    /* Position */
     const rect = triggerBtn.getBoundingClientRect();
-    const menuW = Math.min(menu.offsetWidth || 200, window.innerWidth - 16);
-    let left = rect.right - menuW + 8;
-    left = Math.max(8, Math.min(left, window.innerWidth - menuW - 8));
-    const top = rect.bottom + window.scrollY + 8;
-    menu.style.left = left + 'px';
-    menu.style.top = top + 'px';
-
-    requestAnimationFrame(()=> menu.classList.add('show'));
-    try { triggerBtn.setAttribute('aria-expanded','true'); } catch(e){}
-
-    // actions
-    menu.querySelector('[data-action="open"]').addEventListener('click', (e) => {
-      e.stopPropagation();
+    menu.style.top = rect.bottom + window.scrollY + 8 + "px";
+    menu.style.left = rect.right - 160 + "px";
+  
+    /* OPEN CHAT */
+    menu.querySelector('[data-action="open"]').onclick = () => {
+      const profile = JSON.parse(localStorage.getItem("infinity_profile") || "{}");
       const qs = new URLSearchParams();
-      qs.set('t', item.contact === 'self' ? 'self' : (item.peer_token || item.contact));
-      if (profile && profile.name) qs.set('username', profile.name);
-      window.location.href = '/chat?' + qs.toString();
-      closeAllContactMenus();
-    });
-
-    menu.querySelector('[data-action="block"]').addEventListener('click', (e) => {
-      e.stopPropagation();
-      if (confirm(`Block ${item.name || item.contact}?`)) {
-        card.style.opacity = '0.5';
-        // TODO: call API to block
-      }
-      closeAllContactMenus();
-    });
-
-    menu.querySelector('[data-action="delete"]').addEventListener('click', (e) => {
-      e.stopPropagation();
-      if (confirm(`Delete chat with ${item.name || item.contact}?`)) {
-        card.remove();
-        // TODO: notify server
-      }
-      closeAllContactMenus();
-    });
-
-    // outside click closes (one-time listener)
-    const onDoc = (ev) => {
-      if (!menu.contains(ev.target) && !triggerBtn.contains(ev.target)) {
-        menu.classList.remove('show');
-        setTimeout(()=> menu.remove(), 160);
-        document.removeEventListener('click', onDoc);
-      }
+      qs.set("t", item.contact === "self" ? "self" : (item.peer_token || item.contact));
+      if (profile.name) qs.set("username", profile.name);
+      window.location.href = "/chat?" + qs.toString();
     };
-    setTimeout(()=> document.addEventListener('click', onDoc), 10);
+  
+    /* BLOCK / BLOCK & DELETE */
+    menu.querySelector('[data-action="block"]').onclick = async () => {
+      const r = await showConfirmModal({
+        title: "Block Contact",
+        body: `
+          <b>${item.name || item.contact}</b><br><br>
+          <b>Block</b> → They can’t message/call you.<br>
+          <b>Block & Delete</b> → Block + remove from contacts.
+        `,
+        confirmText: "Block",
+        cancelText: "Block & Delete"
+      });
+  
+      let blocked = loadBlocked();
+  
+      /* BLOCK ONLY */
+      if (r.action === "confirm") {
+        if (!blocked.includes(contactId)) blocked.push(contactId);
+        saveBlocked(blocked);
+        await blockServer(contactId);
+        alert("Blocked.");
+      }
+  
+      /* BLOCK AND DELETE CONTACT */
+      if (r.action === "cancel") {
+        if (!blocked.includes(contactId)) blocked.push(contactId);
+        saveBlocked(blocked);
+        await blockServer(contactId);
+  
+        // delete contact from offline DB
+        const req = indexedDB.open("infinity_offline_v3", 2);
+        req.onsuccess = () => {
+          const db = req.result;
+          db.transaction("contacts", "readwrite")
+            .objectStore("contacts")
+            .delete(contactId);
+        };
+  
+        card.remove();
+        alert("Blocked & Deleted.");
+      }
+  
+      menu.remove();
+    };
+  
+    /* DELETE CHAT (clear messages only) */
+    menu.querySelector('[data-action="delete"]').onclick = async () => {
+      const ok = confirm("Clear all messages for this chat?");
+      if (!ok) return;
+  
+      clearLocalMessages(contactId);
+      alert("Chat cleared.");
+      menu.remove();
+    };
+  
+    /* Close on outside */
+    setTimeout(() => {
+      const closeFn = (ev) => {
+        if (!menu.contains(ev.target) && !triggerBtn.contains(ev.target)) {
+          menu.remove();
+          document.removeEventListener("click", closeFn);
+        }
+      };
+      document.addEventListener("click", closeFn);
+    }, 20);
   }
-
+  
   // --- load contacts from server and render (FIXED VERSION) ---
   async function loadContacts() {
     const container = document.getElementById('contactsContainer');
