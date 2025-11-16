@@ -261,9 +261,6 @@ def api_messages():
         return jsonify({"error": str(e)}), 500
 
 # ---------- Block / Unblock endpoints ----------
-import sqlite3, time
-from flask import request, jsonify, current_app, session as flask_session
-
 def ensure_blocked_table():
     try:
         conn = db_conn()
@@ -300,73 +297,83 @@ ensure_blocked_table()
 
 @app.route('/api/block_contact', methods=['POST'])
 def api_block_contact():
-    """
-    Body: { "contact": "...", "owner": "optionalOwner" }
-    Response: { "status": "ok" }
-    """
-    data = request.get_json(silent=True) or {}
-    contact = (data.get('contact') or '').strip()
-    if not contact:
-        return jsonify({"error": "missing_contact"}), 400
-    owner = data.get('owner') or flask_session.get('username') or None
-    if not owner:
-        return jsonify({"error": "not_logged_in"}), 401
+    import sqlite3
+    from flask import request, jsonify, session as flask_session
 
-    try:
-        conn = db_conn()
-        cur = conn.cursor()
-        now = int(time.time())
-        cur.execute("INSERT OR REPLACE INTO blocked_contacts (owner, contact, blocked_at) VALUES (?,?,?)",
-                    (owner, contact, now))
-        conn.commit()
-        conn.close()
-        return jsonify({"status": "ok"})
-    except Exception as e:
-        current_app.logger.exception("api_block_contact failed: %s", e)
-        return jsonify({"error": "server_error"}), 500
+    data = request.get_json() or {}
+    owner = flask_session.get("username") or data.get("owner")
+    contact = data.get("contact")
+
+    if not owner or not contact:
+        return jsonify({"error": "missing_fields"}), 400
+
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS blocked_contacts (
+            owner TEXT,
+            contact TEXT
+        );
+    """)
+
+    cur.execute("INSERT INTO blocked_contacts (owner, contact) VALUES (?, ?)", 
+                (owner, contact))
+    conn.commit()
+    conn.close()
+
+    return jsonify({"status": "blocked"})
 
 @app.route('/api/unblock_contact', methods=['POST'])
 def api_unblock_contact():
-    """
-    Body: { "contact": "...", "owner": "optionalOwner" }
-    Response: { "status": "ok" }
-    """
-    data = request.get_json(silent=True) or {}
-    contact = (data.get('contact') or '').strip()
-    if not contact:
-        return jsonify({"error": "missing_contact"}), 400
-    owner = data.get('owner') or flask_session.get('username') or None
-    if not owner:
-        return jsonify({"error": "not_logged_in"}), 401
+    import sqlite3
+    from flask import request, jsonify, session as flask_session
 
-    try:
-        conn = db_conn()
-        cur = conn.cursor()
-        cur.execute("DELETE FROM blocked_contacts WHERE owner = ? AND contact = ?", (owner, contact))
-        conn.commit()
-        conn.close()
-        return jsonify({"status": "ok"})
-    except Exception as e:
-        current_app.logger.exception("api_unblock_contact failed: %s", e)
-        return jsonify({"error": "server_error"}), 500
+    data = request.get_json() or {}
+    owner = flask_session.get("username") or data.get("owner")
+    contact = data.get("contact")
 
+    if not owner or not contact:
+        return jsonify({"error": "missing_fields"}), 400
 
-@app.route('/api/blocked_list', methods=['GET'])
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+
+    cur.execute("""
+        DELETE FROM blocked_contacts
+        WHERE owner = ? AND contact = ?
+    """, (owner, contact))
+
+    conn.commit()
+    conn.close()
+
+    return jsonify({"status": "unblocked"})
+
+@app.route('/api/blocked_list')
 def api_blocked_list():
-    owner = flask_session.get('username') or request.args.get('username') or None
+    import sqlite3
+    from flask import request, jsonify, session as flask_session
+
+    owner = flask_session.get("username") or request.args.get("owner")
+
     if not owner:
         return jsonify({"blocked": []})
-    try:
-        conn = db_conn()
-        cur = conn.cursor()
-        cur.execute("SELECT contact, blocked_at FROM blocked_contacts WHERE owner = ? ORDER BY blocked_at DESC", (owner,))
-        rows = cur.fetchall()
-        conn.close()
-        blocked = [{"contact": r[0], "blocked_at": int(r[1])} for r in rows]
-        return jsonify({"blocked": blocked})
-    except Exception as e:
-        current_app.logger.exception("api_blocked_list failed: %s", e)
-        return jsonify({"blocked": []})
+
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS blocked_contacts (
+            owner TEXT,
+            contact TEXT
+        )
+    """)
+
+    cur.execute("SELECT contact FROM blocked_contacts WHERE owner=?", (owner,))
+    rows = [r[0] for r in cur.fetchall()]
+    conn.close()
+
+    return jsonify({"blocked": rows})
 
 @app.route('/static/sw.js')
 def serve_sw():
